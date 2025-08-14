@@ -1,0 +1,88 @@
+# ----------------------------------------------------
+# Configuration for ANR Test Data Processing
+# ----------------------------------------------------
+
+# --- Input Settings ---
+input:
+  # Path to the ANR test data CSV file
+  path: "../sample_input/input_ukri_sampled_1k.csv"
+  
+  # Input file format: 'csv' or 'json'
+  format: "csv"
+  
+  # Field mappings from source data to standard fields
+  # The ANR CSV has: anr_code, title
+  mappings:
+    # Map ANR code to award_id for grant matching
+    award_id: "grant_id"
+    
+    # Map title field
+    title: "title"
+    
+    # Optional fields not present in ANR data
+    # These will be None/empty in the input but can be enriched from OpenAlex
+    authors: "first_author"
+    year: "year"
+
+# --- Output Settings ---
+output:
+  # Path to the output file
+  path: "../results_ukri_sampled_1k.csv"
+  
+  # Output file format: 'csv' or 'json'
+  format: "csv"
+
+# --- API & Matching Settings ---
+api:
+  # REQUIRED: Email address for OpenAlex polite pool access
+  mailto: "adam@ror.org"
+  
+  # Title similarity threshold (0-100)
+  # Higher values require closer matches
+  similarity_threshold: 95
+  
+  # Target funder IDs for UKRI and related UK funding bodies
+  # Multiple IDs to check for any UK-based funding
+  target_funder_ids:
+    - "https://openalex.org/F4320306076"
+    - "https://openalex.org/F4320309095"
+    - "https://openalex.org/F4320309096"
+    - "https://openalex.org/F4320309097"
+    - "https://openalex.org/F4320309098"
+    - "https://openalex.org/F4320309099"
+    - "https://openalex.org/F4320309100"
+    - "https://openalex.org/F4320309101"
+    - "https://openalex.org/F4320309102"
+    - "https://openalex.org/F4320314731"
+    - "https://openalex.org/F4320334609"
+    - "https://openalex.org/F4320334629"
+    - "https://openalex.org/F4320334630"
+    - "https://openalex.org/F4320334627"
+    - "https://openalex.org/F4320335087"
+    - "https://openalex.org/F4320334626"
+    - "https://openalex.org/F4320334631"
+    - "https://openalex.org/F4320336061"
+    - "https://openalex.org/F4320334632"
+  
+  # API error tracking settings
+  error_tracking:
+    # Maximum error rate before stopping (0.0-1.0)
+    max_error_rate: 0.8
+    
+    # Time window for tracking errors (seconds)
+    window_seconds: 300
+    
+    # Minimum attempts before checking health
+    min_attempts: 10
+    
+    # Maximum consecutive failures before stopping
+    max_consecutive_failures: 5
+
+# --- Processing Settings ---
+processing:
+  # Optional: Limit number of records to process (for testing)
+  # Remove or set to null to process all records
+  # limit: 5
+  
+  # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: "INFO"
