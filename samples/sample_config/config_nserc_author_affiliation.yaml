@@ -1,0 +1,96 @@
+# ----------------------------------------------------
+# Configuration for NSERC Author-Affiliation Matching
+# ----------------------------------------------------
+
+# --- Matching Mode Settings ---
+matching:
+  # Mode: 'title' for title-based matching, 'author_affiliation' for author-affiliation matching
+  mode: "author_affiliation"
+  
+  # Author name parsing style
+  # Options: 'auto', 'last_comma_first', 'first_last', 'last_initial', 'first_initial_last'
+  # NSERC format appears to be "LastName, FirstName"
+  author_name_style: "last_comma_first"
+  
+  # Separator for multiple authors in the input (if applicable)
+  author_separator: ";"
+  
+  # Fuzzy matching thresholds (0.0 to 1.0)
+  name_matching_threshold: 0.85      # Threshold for author name similarity
+  affiliation_matching_threshold: 0.8 # Threshold for affiliation similarity
+  
+  # Embedding model settings for semantic affiliation matching
+  use_embedding_model: true          # Enable semantic affiliation matching
+  embedding_model_path: "cometadata/affiliation-clustering-0.3b"  # HuggingFace model
+  embedding_similarity_threshold: 0.65  # Cosine similarity threshold for embeddings (lower to catch abbreviations)
+  
+  # Search settings
+  max_results_per_author: 100  # Maximum number of works to retrieve per author search
+  # year_search_window: 5      # Optional: limit years to search forward (commented = no limit)
+
+# --- Input Settings ---
+input:
+  # Path to the NSERC CSV file
+  path: "samples/sample_input/input_nserc.csv"
+  
+  # Input file format: 'csv' or 'json'
+  format: "csv"
+  
+  # Field mappings from NSERC CSV to standard fields
+  mappings:
+    # Map ApplicationID to award_id for grant matching
+    award_id: "ApplicationID"
+    
+    # Map author name field - appears to be "Name-Nom" in NSERC format
+    authors: "Name-Nom"
+    
+    # Map institution/affiliation field - field 5 in the CSV
+    affiliation: "Institution-Établissement"
+    
+    # Optional: Map year field if available
+    # Using FiscalYear as the year for filtering
+    year: "FiscalYear-Exercice financier"
+
+# --- Output Settings ---
+output:
+  # Path to the output file
+  path: "results_nserc_author_affiliation.csv"
+  
+  # Output file format: 'csv' or 'json'
+  format: "csv"
+
+# --- API & Matching Settings ---
+api:
+  # REQUIRED: Email address for OpenAlex polite pool access
+  mailto: "adam@ror.org"
+  
+  # Title similarity threshold (still used for fallback if needed)
+  similarity_threshold: 95
+  
+  # Target funder IDs for NSERC
+  target_funder_ids:
+    # NSERC - Natural Sciences and Engineering Research Council of Canada
+    - "https://openalex.org/F4320334593"
+  
+  # API error tracking settings
+  error_tracking:
+    # Maximum error rate before stopping (0.0-1.0)
+    max_error_rate: 0.8
+    
+    # Time window for tracking errors (seconds)
+    window_seconds: 300
+    
+    # Minimum attempts before checking health
+    min_attempts: 10
+    
+    # Maximum consecutive failures before stopping
+    max_consecutive_failures: 5
+
+# --- Processing Settings ---
+processing:
+  # Optional: Limit number of records to process (for testing)
+  # Remove or set to null to process all records
+  # limit: 1
+  
+  # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: "INFO"

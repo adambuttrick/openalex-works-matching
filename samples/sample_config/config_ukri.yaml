@@ -5,7 +5,7 @@
 # --- Input Settings ---
 input:
   # Path to the ANR test data CSV file
-  path: "../sample_input/input_ukri_sampled_1k.csv"
+  path: "samples/sample_input/input_ukri_sampled_1k.csv"
   
   # Input file format: 'csv' or 'json'
   format: "csv"
@@ -27,7 +27,7 @@ input:
 # --- Output Settings ---
 output:
   # Path to the output file
-  path: "../results_ukri_sampled_1k.csv"
+  path: "results_ukri_sampled_1k.csv"
   
   # Output file format: 'csv' or 'json'
   format: "csv"

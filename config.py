@@ -43,11 +43,20 @@ class ConfigLoader:
         if 'mappings' not in input_config:
             raise ConfigurationError("Missing required field: input.mappings")
         
+        matching_mode = self.config.get('matching', {}).get('mode', 'title')
+        
         mappings = input_config['mappings']
-        required_mappings = ['award_id', 'title']
-        for mapping in required_mappings:
-            if mapping not in mappings:
-                raise ConfigurationError(f"Missing required mapping: input.mappings.{mapping}")
+        
+        if matching_mode == 'author_affiliation':
+            required_mappings = ['award_id', 'authors', 'affiliation']
+            for mapping in required_mappings:
+                if mapping not in mappings:
+                    raise ConfigurationError(f"Missing required mapping for author-affiliation mode: input.mappings.{mapping}")
+        else:
+            required_mappings = ['award_id', 'title']
+            for mapping in required_mappings:
+                if mapping not in mappings:
+                    raise ConfigurationError(f"Missing required mapping: input.mappings.{mapping}")
         
         output_config = self.config['output']
         if 'path' not in output_config:
@@ -146,3 +155,46 @@ class ConfigLoader:
                 return [funder_id]
         
         return None
+    
+    @property
+    def matching_settings(self):
+        return self.config.get('matching', {})
+    
+    def get_matching_mode(self):
+        return self.matching_settings.get('mode', 'title')
+    
+    def get_author_name_style(self):
+        return self.matching_settings.get('author_name_style', 'auto')
+    
+    def get_author_separator(self):
+        return self.matching_settings.get('author_separator', ';')
+    
+    def get_name_matching_threshold(self):
+        threshold = self.matching_settings.get('name_matching_threshold', 0.85)
+        if not isinstance(threshold, (int, float)) or threshold < 0 or threshold > 1:
+            raise ConfigurationError("matching.name_matching_threshold must be between 0.0 and 1.0")
+        return threshold
+    
+    def get_affiliation_matching_threshold(self):
+        threshold = self.matching_settings.get('affiliation_matching_threshold', 0.8)
+        if not isinstance(threshold, (int, float)) or threshold < 0 or threshold > 1:
+            raise ConfigurationError("matching.affiliation_matching_threshold must be between 0.0 and 1.0")
+        return threshold
+    
+    def use_embedding_model(self):
+        return self.matching_settings.get('use_embedding_model', True)
+    
+    def get_embedding_model_path(self):
+        return self.matching_settings.get('embedding_model_path', 'cometadata/affiliation-clustering-0.3b')
+    
+    def get_embedding_similarity_threshold(self):
+        threshold = self.matching_settings.get('embedding_similarity_threshold', 0.7)
+        if not isinstance(threshold, (int, float)) or threshold < 0 or threshold > 1:
+            raise ConfigurationError("matching.embedding_similarity_threshold must be between 0.0 and 1.0")
+        return threshold
+    
+    def get_max_results_per_author(self):
+        return self.matching_settings.get('max_results_per_author', 50)
+    
+    def get_year_search_window(self):
+        return self.matching_settings.get('year_search_window', None)

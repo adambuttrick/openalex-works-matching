@@ -8,7 +8,8 @@ from datetime import datetime
 from config import ConfigLoader, ConfigurationError
 from data_io import create_reader, create_writer
 from openalex_client import OpenAlexClient, APIHealthError
-from processing import ProcessingEngine
+from processing import ProcessingEngine, AuthorAffiliationProcessor
+from output_fields import get_output_fields_for_mode
 
 
 def setup_logging(log_level):
@@ -99,7 +100,16 @@ def main():
         
         logging.info(f"Input: {config.get_input_path()} (format: {config.get_input_format()})")
         logging.info(f"Output: {config.get_output_path()} (format: {config.get_output_format()})")
-        logging.info(f"Similarity threshold: {config.get_similarity_threshold()}%")
+        
+        # Get matching mode
+        matching_mode = config.get_matching_mode()
+        logging.info(f"Matching mode: {matching_mode}")
+        
+        if matching_mode == 'title':
+            logging.info(f"Similarity threshold: {config.get_similarity_threshold()}%")
+        else:
+            logging.info(f"Name matching threshold: {config.get_name_matching_threshold()}")
+            logging.info(f"Affiliation matching threshold: {config.get_affiliation_matching_threshold()}")
         
         logging.info("Initializing OpenAlex client...")
         openalex_client = OpenAlexClient(
@@ -108,7 +118,23 @@ def main():
             error_tracking_config=config.get_error_tracking_config()
         )
         
-        processing_engine = ProcessingEngine(config, openalex_client)
+        if matching_mode == 'author_affiliation':
+            embedding_model = None
+            if config.use_embedding_model():
+                try:
+                    logging.info("Loading affiliation embedding model...")
+                    from affiliation_embeddings import CachedAffiliationMatcher
+                    embedding_model = CachedAffiliationMatcher(
+                        model_path=config.get_embedding_model_path()
+                    )
+                    logging.info("Embedding model loaded successfully")
+                except Exception as e:
+                    logging.warning(f"Failed to load embedding model: {e}")
+                    logging.warning("Falling back to string-based affiliation matching")
+            
+            processing_engine = AuthorAffiliationProcessor(config, openalex_client, embedding_model)
+        else:
+            processing_engine = ProcessingEngine(config, openalex_client)
         
         reader = create_reader(
             file_path=config.get_input_path(),
@@ -123,6 +149,9 @@ def main():
                 file_path=config.get_output_path(),
                 format=config.get_output_format()
             )
+            expected_fields = get_output_fields_for_mode(matching_mode)
+            if hasattr(writer, 'write_header'):
+                writer.write_header(expected_fields)
         
         stats = {
             'total_processed': 0,
@@ -147,19 +176,25 @@ def main():
                 
                 try:
                     logging.info(f"Processing record {i}: {record.get('award_id', 'unknown')}")
-                    enriched_record = processing_engine.process_record(record)
+                    enriched_records = processing_engine.process_record(record)
                     
                     stats['total_processed'] += 1
                     
-                    if enriched_record.get('match_status') == 'matched':
-                        stats['matched'] += 1
-                        match_ratio = enriched_record.get('match_ratio', 0)
-                        stats['match_ratios'].append(match_ratio)
-                    elif enriched_record.get('match_status') == 'no_match':
-                        stats['no_match'] += 1
+                    matched_count = 0
+                    for enriched_record in enriched_records:
+                        if enriched_record.get('match_status') == 'matched':
+                            matched_count += 1
+                            match_ratio = enriched_record.get('match_ratio', 0)
+                            stats['match_ratios'].append(match_ratio)
+                        
+                        if writer:
+                            writer.write_record(enriched_record)
                     
-                    if writer:
-                        writer.write_record(enriched_record)
+                    if matched_count > 0:
+                        stats['matched'] += 1
+                        logging.info(f"  Found {matched_count} matching works")
+                    else:
+                        stats['no_match'] += 1
                     
                     if i % 10 == 0:
                         print(f"Processed {i} records... ({stats['matched']} matched)")
