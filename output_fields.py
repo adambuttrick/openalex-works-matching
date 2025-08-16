@@ -30,7 +30,6 @@ MATCHING_FIELDS = [
 OPENALEX_FIELDS = [
     'openalex_work_id',
     'metadata_source',
-    'publication_title',
     'publication_year',
     'publication_date',
     'doi',

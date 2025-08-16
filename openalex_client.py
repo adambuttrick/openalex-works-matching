@@ -160,7 +160,7 @@ class OpenAlexClient:
         return None
 
     @timer_decorator
-    def search_for_work(self, title, max_results=10):
+    def search_for_work(self, title, max_results=10, year=None):
         if not title:
             return None
 
@@ -169,7 +169,7 @@ class OpenAlexClient:
         logging.debug(f"Strategy 1 - Searching with cleaned title: {cleaned_title}")
 
         result = self._search_and_match(
-            cleaned_title, original_title, max_results, "cleaned_title")
+            cleaned_title, original_title, max_results, "cleaned_title", year)
         if result:
             return result
 
@@ -178,7 +178,7 @@ class OpenAlexClient:
             truncated_title = ' '.join(words[:10])
             logging.debug(f"Strategy 2 - Searching with truncated title: {truncated_title}")
             result = self._search_and_match(
-                truncated_title, original_title, max_results, "truncated_title")
+                truncated_title, original_title, max_results, "truncated_title", year)
             if result:
                 return result
 
@@ -186,13 +186,13 @@ class OpenAlexClient:
         if aggressive_title != cleaned_title:
             logging.debug(f"Strategy 3 - Searching with aggressive normalization: {aggressive_title}")
             result = self._search_and_match(
-                aggressive_title, original_title, max_results, "aggressive_normalization")
+                aggressive_title, original_title, max_results, "aggressive_normalization", year)
             if result:
                 return result
 
         logging.debug(f"Strategy 4 - Searching with raw title: {original_title}")
         result = self._search_and_match(
-            original_title, original_title, max_results, "raw_title")
+            original_title, original_title, max_results, "raw_title", year)
         if result:
             return result
 
@@ -200,12 +200,25 @@ class OpenAlexClient:
         return None
 
     def _search_and_match(self, search_title, original_title,
-                          max_results, method):
+                          max_results, method, year=None):
         url = f"{self.BASE_URL}/works"
         params = {
             'search': search_title,
             'per_page': max_results
         }
+
+        year_filter_applied = False
+        year_int = None
+        if year:
+            try:
+                year_int = int(year)
+                start_year = year_int - 2
+                end_year = year_int + 2
+                params['filter'] = f'publication_year:{start_year}-{end_year}'
+                year_filter_applied = True
+                logging.debug(f"Applying year filter: publication_year:{start_year}-{end_year}")
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid year value for filtering: {year}. Proceeding without year filter.")
 
         logging.info(f"OpenAlex title search ({method}): '{search_title[:100]}...'")
 
@@ -227,6 +240,18 @@ class OpenAlexClient:
             if not work_title:
                 continue
 
+            if year_int is not None:
+                work_year = work.get('publication_year')
+                if work_year:
+                    try:
+                        work_year_int = int(work_year)
+                        year_diff = abs(year_int - work_year_int)
+                        if year_diff > 2:
+                            logging.debug(f"Skipping work with year {work_year} (diff: {year_diff} years)")
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+
             normalized_work = normalize_text(work_title)
 
             ratio = fuzz.ratio(normalized_search, normalized_work)
@@ -237,6 +262,8 @@ class OpenAlexClient:
 
         if best_match and best_ratio >= self.similarity_threshold:
             logging.info(f"Found match with {best_ratio}% similarity using {method}")
+            if year_filter_applied:
+                logging.debug(f"Match found with year filter applied")
             return best_match, best_ratio, method
 
         return None
@@ -253,7 +280,6 @@ class OpenAlexClient:
                          award_id=None):
         metadata = {
             'openalex_work_id': work_data.get('id', ''),
-            'publication_title': work_data.get('title', ''),
             'publication_year': work_data.get('publication_year'),
             'publication_date': work_data.get('publication_date'),
             'doi': work_data.get('doi', ''),

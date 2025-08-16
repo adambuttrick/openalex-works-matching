@@ -28,8 +28,10 @@ class ProcessingEngine:
         result['extracted_date'] = extracted_date
         result['date_format'] = date_format
         
+        input_year = raw_record.get('year')
+        
         logging.info(f"Searching for: {title[:100]}")
-        search_result = self.openalex_client.search_for_work(title)
+        search_result = self.openalex_client.search_for_work(title, year=input_year)
         
         if not search_result:
             logging.info(f"No match found for: {title[:100]}")
