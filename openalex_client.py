@@ -671,6 +671,7 @@ class OpenAlexClient:
             authorships = work.get('authorships', [])
             best_author_match = None
             best_author_id = None
+            best_author_orcid = None
             best_author_score = 0
             best_affiliation_match = None
             best_affiliation_id = None
@@ -681,6 +682,7 @@ class OpenAlexClient:
                 author = authorship.get('author', {})
                 author_display_name = author.get('display_name', '')
                 author_id = author.get('id', '')
+                author_orcid = author.get('orcid', '')
 
                 if not author_display_name:
                     continue
@@ -710,6 +712,7 @@ class OpenAlexClient:
                         if aff_match and aff_score > best_affiliation_score:
                             best_author_match = author_display_name
                             best_author_id = author_id
+                            best_author_orcid = author_orcid
                             best_author_score = name_score
                             best_affiliation_match = inst_name
                             best_affiliation_id = inst_id
@@ -721,6 +724,7 @@ class OpenAlexClient:
                     'work': work,
                     'matched_author': best_author_match,
                     'matched_author_id': best_author_id,
+                    'matched_author_orcid': best_author_orcid,
                     'matched_affiliation': best_affiliation_match,
                     'matched_affiliation_id': best_affiliation_id,
                     'matched_affiliation_ror': best_affiliation_ror,

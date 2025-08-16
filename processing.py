@@ -247,6 +247,7 @@ class AuthorAffiliationProcessor:
             result['match_method'] = 'author_affiliation'
             result['matched_author'] = match['matched_author']
             result['matched_author_id'] = match.get('matched_author_id', '')
+            result['matched_author_orcid'] = match.get('matched_author_orcid', '')
             result['matched_affiliation'] = match['matched_affiliation']
             result['matched_affiliation_id'] = match.get('matched_affiliation_id', '')
             result['matched_affiliation_ror'] = match.get('matched_affiliation_ror', '')

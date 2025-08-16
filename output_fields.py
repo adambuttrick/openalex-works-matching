@@ -19,6 +19,7 @@ MATCHING_FIELDS = [
     # Author-affiliation specific matching fields
     'matched_author',
     'matched_author_id',
+    'matched_author_orcid',
     'matched_affiliation',
     'matched_affiliation_id',
     'matched_affiliation_ror',
@@ -94,7 +95,7 @@ def get_output_fields_for_mode(matching_mode='title'):
                    'matched_authors', 'matched_authors_count', 'matched_authors_list'}
         return [f for f in ALL_OUTPUT_FIELDS if f not in exclude]
     else:
-        exclude = {'affiliation', 'matched_author', 'matched_author_id', 
+        exclude = {'affiliation', 'matched_author', 'matched_author_id', 'matched_author_orcid',
                    'matched_affiliation', 'matched_affiliation_id', 'matched_affiliation_ror',
                    'author_match_score', 'affiliation_match_score', 'combined_match_score',
                    'work_authors'}
