@@ -198,3 +198,32 @@ class ConfigLoader:
     
     def get_year_search_window(self):
         return self.matching_settings.get('year_search_window', None)
+    
+    def get_author_weight(self):
+        weight = self.matching_settings.get('author_weight', 0.3)
+        if not isinstance(weight, (int, float)) or weight < 0 or weight > 1:
+            raise ConfigurationError("matching.author_weight must be between 0.0 and 1.0")
+        return weight
+    
+    def get_affiliation_weight(self):
+        weight = self.matching_settings.get('affiliation_weight', 0.7)
+        if not isinstance(weight, (int, float)) or weight < 0 or weight > 1:
+            raise ConfigurationError("matching.affiliation_weight must be between 0.0 and 1.0")
+        
+        author_weight = self.get_author_weight()
+        if abs(author_weight + weight - 1.0) > 0.01:
+            logging.warning(f"Author weight ({author_weight}) + affiliation weight ({weight}) != 1.0. Normalizing weights.")
+        
+        return weight
+    
+    def get_minimum_affiliation_score(self):
+        score = self.matching_settings.get('minimum_affiliation_score', 0.85)
+        if not isinstance(score, (int, float)) or score < 0 or score > 1:
+            raise ConfigurationError("matching.minimum_affiliation_score must be between 0.0 and 1.0")
+        return score
+    
+    def use_institution_search(self):
+        return self.matching_settings.get('use_institution_search', True)
+    
+    def use_ror_api(self):
+        return self.matching_settings.get('use_ror_api', True)

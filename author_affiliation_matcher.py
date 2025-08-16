@@ -8,10 +8,52 @@ from typing import Optional
 
 
 class AuthorAffiliationMatcher:
+    # Common surname prefixes that should be kept together
+    SURNAME_PREFIXES = {
+        'de', 'del', 'della', 'di', 'da',
+        'van', 'von', 'der', 'den', 'ter',
+        'le', 'la', 'les', 'du', 'des',
+        'mac', 'mc', "o'", "d'",
+        'al', 'el', 'ibn', 'bin', 'abu',
+        'dos', 'das', 'do',
+        'san', 'santa', 'santo',
+        'st', 'saint'
+    }
+    
     def __init__(self, name_matching_threshold=0.85, embedding_model=None):
         self.name_matching_threshold = name_matching_threshold
         self.embedding_model = embedding_model
 
+    @staticmethod
+    def is_likely_initial(token):
+        if not token:
+            return False
+        clean_token = token.replace('.', '').strip()
+        return (len(clean_token) == 1 or 
+                (len(clean_token) <= 3 and clean_token.isupper()))
+    
+    @classmethod
+    def is_surname_prefix(cls, token):
+        return token.lower() in cls.SURNAME_PREFIXES
+    
+    @classmethod
+    def parse_compound_surname_with_initial(cls, name_parts):
+        if not name_parts:
+            return [], []
+        
+        if cls.is_likely_initial(name_parts[-1]):
+            initial_parts = [name_parts[-1]]
+            surname_parts = name_parts[:-1]
+        else:
+            surname_parts = name_parts
+            initial_parts = []
+        
+        if len(surname_parts) > 1:
+            surname_str = ' '.join(surname_parts)
+            surname_parts = [surname_str]
+        
+        return surname_parts, initial_parts
+    
     @staticmethod
     def is_latin_char_text(text):
         if not isinstance(text, str):
@@ -35,22 +77,72 @@ class AuthorAffiliationMatcher:
         return text
 
     @staticmethod
+    def extract_surname(name: str, style: str) -> str:
+        if not name:
+            return ''
+        
+        name = name.strip()
+        
+        if style == 'last_initial':
+            # Format: "Smith J" or "De La Cruz Pech-Canul Á"
+            parts = name.split()
+            if len(parts) >= 2:
+                surname_parts, _ = AuthorAffiliationMatcher.parse_compound_surname_with_initial(parts)
+                return ' '.join(surname_parts) if surname_parts else parts[0]
+            return name
+            
+        elif style == 'last_comma_first':
+            # Format: "Smith, John"
+            if ',' in name:
+                return name.split(',')[0].strip()
+            return name
+            
+        elif style == 'last_first':
+            # Format: "Smith John"
+            parts = name.split()
+            if parts:
+                return parts[0]
+            return name
+            
+        elif style == 'first_initial_last':
+            # Format: "J. Smith" or "J Smith"
+            parts = name.split()
+            # Skip initials at the beginning
+            for i, part in enumerate(parts):
+                if not (len(part) <= 2 and (part.endswith('.') or len(part) == 1)):
+                    # This is likely the start of the surname
+                    return ' '.join(parts[i:])
+            return parts[-1] if parts else name
+            
+        else:  # 'first_last' or 'auto'
+            # Format: "John Smith" - take the last word(s)
+            parsed = HumanName(name)
+            return parsed.last or name.split()[-1] if name.split() else name
+    
+    @staticmethod
     def parse_name_by_style(name: str, style: str) -> dict:
         name = name.strip()
 
         if style == 'last_initial':
-            # Format: "Smith J"
+            # Format: "Smith J" or "De La Cruz Pech-Canul Á"
             parts = name.split()
+            
             if len(parts) >= 2:
-                last_name = ' '.join(parts[:-1])
-                initials = parts[-1]
-                first_initial = initials[0].lower() if initials else ''
-
+                surname_parts, initial_parts = AuthorAffiliationMatcher.parse_compound_surname_with_initial(parts)
+                last_name = ' '.join(surname_parts) if surname_parts else name
+                
+                if initial_parts:
+                    initials = initial_parts[0]
+                    first_initial = initials[0].lower() if initials else ''
+                else:
+                    first_initial = ''
+                    initials = ''
+                
                 return {
                     'first': first_initial,
                     'last': last_name.lower(),
                     'middle': '',
-                    'normalized': f"{last_name.lower()} {first_initial}",
+                    'normalized': f"{last_name.lower()} {first_initial}".strip(),
                     'original': name,
                     'style': style
                 }
@@ -129,7 +221,6 @@ class AuthorAffiliationMatcher:
                     'style': style
                 }
 
-        # Default: try to parse with nameparser (which assumes "First Last" format)
         parsed = HumanName(name)
         first = (parsed.first or '').strip()
         last = (parsed.last or '').strip()

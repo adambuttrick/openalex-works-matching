@@ -501,10 +501,174 @@ class OpenAlexClient:
         return results
 
     @timer_decorator
+    def search_institution(self, institution_name, embedding_model=None, threshold=0.8):
+        if not institution_name:
+            return None
+        
+        url = f"{self.BASE_URL}/institutions"
+        params = {
+            'search': institution_name,
+            'per_page': 10
+        }
+        
+        logging.info(f"Searching for institution: '{institution_name}'")
+        data = self._make_request(url, params)
+        
+        if not data or 'results' not in data:
+            logging.info(f"No institutions found matching: {institution_name}")
+            return None
+        
+        results = data.get('results', [])
+        if not results:
+            return None
+        
+        if embedding_model:
+            best_match = None
+            best_score = 0
+            
+            for inst in results:
+                inst_name = inst.get('display_name', '')
+                if not inst_name:
+                    continue
+                
+                try:
+                    _, score = embedding_model.match_affiliation(
+                        institution_name, inst_name, threshold
+                    )
+                    if score > best_score:
+                        best_score = score
+                        best_match = inst
+                except Exception as e:
+                    logging.warning(f"Embedding comparison failed: {e}")
+            
+            if best_match and best_score >= threshold:
+                inst_id = best_match.get('id', '').split('/')[-1] if best_match.get('id') else None
+                ror_id = best_match.get('ror')
+                logging.info(f"Found institution match: {best_match.get('display_name')} (score: {best_score:.2f})")
+                return {
+                    'id': inst_id,
+                    'ror': ror_id,
+                    'display_name': best_match.get('display_name'),
+                    'score': best_score
+                }
+        else:
+            first_result = results[0]
+            inst_name = first_result.get('display_name', '')
+            
+            similarity = fuzz.ratio(institution_name.lower(), inst_name.lower()) / 100.0
+            
+            if similarity >= threshold:
+                inst_id = first_result.get('id', '').split('/')[-1] if first_result.get('id') else None
+                ror_id = first_result.get('ror')
+                logging.info(f"Found institution match: {inst_name} (score: {similarity:.2f})")
+                return {
+                    'id': inst_id,
+                    'ror': ror_id,
+                    'display_name': inst_name,
+                    'score': similarity
+                }
+        
+        logging.info(f"No sufficiently similar institution found for: {institution_name}")
+        return None
+    
+    def search_ror_affiliation(self, affiliation_text):
+        """Search for an institution in ROR by affiliation text."""
+        if not affiliation_text:
+            return None
+        
+        import urllib.parse
+        encoded_affiliation = urllib.parse.quote(affiliation_text)
+        url = f"https://api.ror.org/v2/organizations?affiliation={encoded_affiliation}"
+        
+        try:
+            logging.info(f"Searching ROR for affiliation: '{affiliation_text}'")
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data or 'items' not in data:
+                logging.info(f"No ROR matches found for: {affiliation_text}")
+                return None
+            
+            items = data.get('items', [])
+            if not items:
+                return None
+            
+            # Look for the best match (highest score with chosen=true preferred)
+            best_match = None
+            for item in items:
+                if item.get('chosen', False):
+                    best_match = item
+                    break
+                if not best_match or item.get('score', 0) > best_match.get('score', 0):
+                    best_match = item
+            
+            if best_match:
+                org = best_match.get('organization', {})
+                ror_id = org.get('id', '').replace('https://ror.org/', '')
+                name = org.get('name')
+                score = best_match.get('score', 0)
+                
+                if score >= 0.7:  # ROR recommends considering matches above 0.7
+                    logging.info(f"Found ROR match: {name} (ROR: {ror_id}, score: {score:.2f})")
+                    return {
+                        'ror': ror_id,
+                        'display_name': name,
+                        'score': score,
+                        'chosen': best_match.get('chosen', False)
+                    }
+            
+            logging.info(f"No sufficiently confident ROR match found for: {affiliation_text}")
+            return None
+            
+        except Exception as e:
+            logging.warning(f"ROR API request failed: {e}")
+            return None
+    
+    @timer_decorator
+    def search_authors_by_institution(self, surname, institution_id=None, ror_id=None):
+        """Search for authors by surname filtered by institution."""
+        if not surname:
+            return []
+        
+        if not institution_id and not ror_id:
+            logging.warning("No institution ID or ROR ID provided for filtered search")
+            return []
+        
+        url = f"{self.BASE_URL}/authors"
+        
+        # Build filter string
+        filter_parts = [f'display_name.search:{surname}']
+        if institution_id:
+            filter_parts.append(f'affiliations.institution.id:I{institution_id}')
+        elif ror_id:
+            filter_parts.append(f'affiliations.institution.ror:{ror_id}')
+        
+        params = {
+            'filter': ','.join(filter_parts),
+            'per_page': 50
+        }
+        
+        logging.info(f"Searching for authors with surname '{surname}' at institution (ID: {institution_id}, ROR: {ror_id})")
+        data = self._make_request(url, params)
+        
+        if not data or 'results' not in data:
+            logging.info(f"No authors found matching criteria")
+            return []
+        
+        results = data.get('results', [])
+        logging.info(f"Found {len(results)} authors with surname '{surname}' at the institution")
+        
+        return results
+
+    @timer_decorator
     def search_by_author_affiliation(self, author_name, affiliation, year=None,
                                      author_style='auto', name_threshold=0.85,
                                      affiliation_threshold=0.8, max_results=50,
-                                     embedding_model=None, year_window=None):
+                                     embedding_model=None, year_window=None,
+                                     author_weight=0.3, affiliation_weight=0.7,
+                                     minimum_affiliation_score=0.95,
+                                     use_institution_search=True, use_ror_api=True):
         if not author_name:
             return []
 
@@ -512,6 +676,167 @@ class OpenAlexClient:
             name_matching_threshold=name_threshold,
             embedding_model=embedding_model
         )
+        
+        # Extract surname for institution-based search
+        surname = matcher.extract_surname(author_name, author_style)
+        
+        # Try institution-first approach if enabled
+        if use_institution_search and affiliation:
+            logging.info(f"Attempting institution-first search for '{author_name}' at '{affiliation}'")
+            
+            # Step 1: Try to find the institution
+            institution_info = self.search_institution(affiliation, embedding_model, affiliation_threshold)
+            
+            # Step 2: If OpenAlex search fails, try ROR API
+            if not institution_info and use_ror_api:
+                logging.info("OpenAlex institution search failed, trying ROR API")
+                ror_result = self.search_ror_affiliation(affiliation)
+                if ror_result:
+                    institution_info = ror_result
+            
+            # Step 3: If we found an institution, search for authors there
+            if institution_info:
+                logging.info(f"Found institution: {institution_info.get('display_name')} (score: {institution_info.get('score', 0):.2f})")
+                
+                # Search for authors with the surname at this institution
+                author_results = self.search_authors_by_institution(
+                    surname, 
+                    institution_id=institution_info.get('id'),
+                    ror_id=institution_info.get('ror')
+                )
+                
+                if author_results:
+                    # Step 4: Name disambiguation if multiple matches
+                    best_author = None
+                    best_score = 0
+                    
+                    for author in author_results:
+                        author_display_name = author.get('display_name', '')
+                        is_similar, score = matcher.are_names_similar(
+                            author_name, author_display_name,
+                            name1_style=author_style,
+                            name2_style='first_last'
+                        )
+                        
+                        if is_similar and score > best_score:
+                            best_score = score
+                            best_author = author
+                    
+                    if best_author:
+                        author_id = best_author.get('id', '').split('/')[-1] if best_author.get('id') else None
+                        logging.info(f"Selected best matching author: {best_author.get('display_name')} (score: {best_score:.2f})")
+                        
+                        # Step 5: Get works for this author
+                        matched_works = self._get_author_works_at_institution(
+                            author_id, 
+                            author_name=best_author.get('display_name'),
+                            institution_info=institution_info,
+                            year=year,
+                            year_window=year_window,
+                            max_results=max_results,
+                            author_weight=author_weight,
+                            affiliation_weight=affiliation_weight,
+                            author_score=best_score,
+                            affiliation_score=institution_info.get('score', 1.0)
+                        )
+                        
+                        if matched_works:
+                            return matched_works
+                
+                logging.info("No matching authors found at the institution, falling back to general search")
+            else:
+                logging.info("Could not resolve institution, falling back to general search")
+        
+        # Fall back to the original surname-based search logic
+        logging.info(f"Using fallback search strategy for '{author_name}'")
+        return self._search_by_author_affiliation_fallback(
+            author_name, affiliation, year,
+            author_style, name_threshold, affiliation_threshold,
+            max_results, embedding_model, year_window,
+            author_weight, affiliation_weight, minimum_affiliation_score,
+            matcher
+        )
+    
+    def _get_author_works_at_institution(self, author_id, author_name, institution_info,
+                                         year=None, year_window=None, max_results=50,
+                                         author_weight=0.3, affiliation_weight=0.7,
+                                         author_score=1.0, affiliation_score=1.0):
+        """Get works for a specific author at a specific institution."""
+        if not author_id:
+            return []
+        
+        # Build year filter
+        year_filter = ""
+        if year:
+            try:
+                start_year = int(year)
+                if year_window is not None:
+                    end_year = start_year + year_window
+                    year_filter = f',publication_year:{start_year}-{end_year}'
+                else:
+                    from datetime import datetime
+                    current_year = datetime.now().year
+                    end_year = current_year + 2
+                    year_filter = f',publication_year:{start_year}-{end_year}'
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid year value: {year}")
+        
+        # Get works
+        url = f"{self.BASE_URL}/works"
+        cursor = '*'
+        all_works = []
+        page_count = 0
+        
+        while cursor and (not max_results or len(all_works) < max_results):
+            params = {
+                'filter': f'author.id:{author_id}{year_filter}',
+                'per_page': 200,
+                'cursor': cursor
+            }
+            
+            data = self._make_request(url, params)
+            
+            if data:
+                works = data.get('results', [])
+                all_works.extend(works)
+                page_count += 1
+                meta = data.get('meta', {})
+                cursor = meta.get('next_cursor')
+                
+                if max_results and len(all_works) >= max_results:
+                    all_works = all_works[:max_results]
+                    break
+            else:
+                break
+        
+        logging.info(f"Found {len(all_works)} works for author {author_name}")
+        
+        # Format results
+        matched_works = []
+        weighted_score = (author_score * author_weight) + (affiliation_score * affiliation_weight)
+        
+        for work in all_works:
+            matched_works.append({
+                'work': work,
+                'matched_author': author_name,
+                'matched_author_id': author_id,
+                'matched_author_orcid': '',  # Would need to get from author data
+                'matched_affiliation': institution_info.get('display_name'),
+                'matched_affiliation_id': institution_info.get('id'),
+                'matched_affiliation_ror': institution_info.get('ror'),
+                'author_match_score': author_score,
+                'affiliation_match_score': affiliation_score,
+                'combined_score': weighted_score
+            })
+        
+        matched_works.sort(key=lambda x: x['combined_score'], reverse=True)
+        return matched_works
+    
+    def _search_by_author_affiliation_fallback(self, author_name, affiliation, year,
+                                               author_style, name_threshold, affiliation_threshold,
+                                               max_results, embedding_model, year_window,
+                                               author_weight, affiliation_weight, minimum_affiliation_score,
+                                               matcher):
 
         parsed_author = matcher.parse_name_by_style(author_name, author_style)
 
@@ -537,12 +862,21 @@ class OpenAlexClient:
                 first_name = re.sub(r'([a-z])([A-Z])', r'\1 \2', first_name)
                 author_search_query = f"{first_name} {last_name}"
         elif author_style == 'last_initial':
-            # Format: "Smith J" -> "J Smith"
+            # Format: "Smith J" -> "J Smith" or "De La Cruz Pech-Canul Á" -> "Á De La Cruz Pech-Canul"
+            # Use the matcher to properly parse compound surnames
             parts = author_search_query.split()
             if len(parts) >= 2:
-                last_name = ' '.join(parts[:-1])
-                initial = parts[-1]
-                author_search_query = f"{initial} {last_name}"
+                # Parse using our enhanced compound surname detection
+                surname_parts, initial_parts = AuthorAffiliationMatcher.parse_compound_surname_with_initial(parts)
+                if surname_parts and initial_parts:
+                    last_name = ' '.join(surname_parts)
+                    initial = initial_parts[0]
+                    author_search_query = f"{initial} {last_name}"
+                else:
+                    # Fallback to simple parsing if no clear initial detected
+                    last_name = ' '.join(parts[:-1])
+                    initial = parts[-1]
+                    author_search_query = f"{initial} {last_name}"
         # For 'first_last' or 'auto', assume it's already in the right format
         # but still check for compound names
         else:
@@ -719,7 +1053,10 @@ class OpenAlexClient:
                             best_affiliation_ror = inst_ror
                             best_affiliation_score = aff_score
 
-            if best_author_match and best_affiliation_match:
+            # Require high confidence affiliation match to avoid false positives
+            if best_author_match and best_affiliation_match and best_affiliation_score >= minimum_affiliation_score:
+                weighted_score = (best_author_score * author_weight) + (best_affiliation_score * affiliation_weight)
+                
                 matched_works.append({
                     'work': work,
                     'matched_author': best_author_match,
@@ -730,7 +1067,7 @@ class OpenAlexClient:
                     'matched_affiliation_ror': best_affiliation_ror,
                     'author_match_score': best_author_score,
                     'affiliation_match_score': best_affiliation_score,
-                    'combined_score': (best_author_score + best_affiliation_score) / 2
+                    'combined_score': weighted_score
                 })
 
         matched_works.sort(key=lambda x: x['combined_score'], reverse=True)
@@ -743,7 +1080,9 @@ class OpenAlexClient:
     def search_by_authors_affiliations(self, author_affiliation_pairs, year=None,
                                        author_style='auto', name_threshold=0.85,
                                        affiliation_threshold=0.8, max_results_per_author=20,
-                                       embedding_model=None, year_window=None):
+                                       embedding_model=None, year_window=None,
+                                       author_weight=0.3, affiliation_weight=0.7,
+                                       minimum_affiliation_score=0.95):
         
         all_results = {}
 
@@ -751,7 +1090,8 @@ class OpenAlexClient:
             author_results = self.search_by_author_affiliation(
                 author_name, affiliation, year,
                 author_style, name_threshold, affiliation_threshold,
-                max_results_per_author, embedding_model, year_window
+                max_results_per_author, embedding_model, year_window,
+                author_weight, affiliation_weight, minimum_affiliation_score
             )
 
             if author_results:

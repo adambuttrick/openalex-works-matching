@@ -73,13 +73,15 @@ After potential matches are found, the system validates them through additional 
 
 The author-affiliation matching approach is designed for scenarios where you have author names and institutional affiliations but may not have publication titles. This method searches for all publications by specific authors and their institutions, making it useful for tracking research outputs from grants where the principal investigator and their institution are known.
 
-The process starts by parsing author names, which can appear in various formats in different datasets. The system supports multiple naming conventions including "Last, First" (common in bibliographic databases), "First Last" (standard format), "Last First" (some Asian conventions), and "Last Initial" (abbreviated forms). Each name is normalized by converting Latin characters to ASCII equivalents and again using Jaro-Winkler for similarity matching.
+The matching process follows an institution-first strategy to minimize false positives. When a search begins, the system first attempts to resolve the institutional affiliation to a specific organization. It starts by searching the OpenAlex institutions database for organizations matching the affiliation string. If no match is found with sufficient confidence, the system falls back to the ROR (Research Organization Registry) API, which specializes in disambiguating messy affiliation strings to standardized institution identifiers. The ROR service can handle variations like "MIT" versus "Massachusetts Institute of Technology" or abbreviated forms like "U of T" for "University of Toronto."
 
-Affiliation matching employs two complementary approaches. The basic string-based method uses fuzzy text matching to compare institution names directly. However, because organizational name assertions often vary significantly in affiliations strings (e.g. "MIT" versus "Massachusetts Institute of Technology" or "U of T" versus "University of Toronto"), the matching can also use an embedding model (`cometadata/affiliation-clustering-0.3b`) specially trained on this disambiguation tasks. This model generates vector embeddings for the institution names and then uses cosine similarity to identify matches, allowing us to determine that "Harvard Medical School" and "Harvard University" refer to the same institution, even though they share few common characters.
+Once an institution is identified, the system extracts the author's surname from the input name (handling various formats including "Last, First", "First Last", "Last Initial", and compound surnames like "De La Cruz"). It then searches specifically for authors with that surname who are affiliated with the identified institution. This targeted approach ensures we only consider authors who have actually published work while affiliated with the specified organization, dramatically reducing false matches compared to searching for authors globally.
 
-The search process then queries the OpenAlex API using both the author name and institution as filters. For each author in the input, the matching retrieves up to a configurable maximum number of publications (default 100). If a year is provided, the search can be limited to a forward-looking window (e.g., publications within 5 years after a grant has been awarded). Each potential match is scored based on both the author name similarity and the affiliation similarity, with these scores combined to rank the results.
+When multiple authors are found at the institution, the system performs name disambiguation using the configured name matching style. Each name is normalized by converting Latin characters to ASCII equivalents and compared using Jaro-Winkler similarity scoring. The author with the highest name similarity score above the threshold is selected as the match. The system then retrieves all publications by this specific author, with optional filtering by year window if a grant year is provided.
 
-Unlike title-based matching which produces one output row per input record, author-affiliation matching generates multiple output rows—one for each publication found for that author at that institution.  Each output row includes the match scores for both author and affiliation, providing transparency about the confidence of each match. All original input fields are preserved in every output row, maintaining the connection between the matched publications and the original grant records.
+If the institution cannot be resolved through either OpenAlex or ROR, the system falls back to a broader search strategy. In this fallback mode, it searches for authors by name across all institutions and then validates each potential match by comparing the affiliation strings. This comparison can use either fuzzy text matching or an embedding model (`cometadata/affiliation-clustering-0.3b`) specially trained on institution name disambiguation. The embedding model generates vector representations of institution names and uses cosine similarity to identify matches, allowing it to recognize that "Harvard Medical School" and "Harvard University" refer to related institutions even when the text differs significantly.
+
+Each potential match is scored using a weighted combination of author name similarity (30% by default) and affiliation similarity (70% by default), reflecting the importance of institutional affiliation in reducing false positives. The system requires a minimum affiliation score (85% by default) to consider a match valid, ensuring high confidence in the results. Unlike title-based matching which produces one output row per input record, author-affiliation matching generates multiple output rows—one for each publication found for that author at that institution. Each output row includes the match scores for both author and affiliation, providing transparency about the confidence of each match.
 
 ## Configuration
 
@@ -136,6 +138,17 @@ matching:
   # Matching thresholds
   name_matching_threshold: 0.85   # Author name similarity (0-1)
   affiliation_matching_threshold: 0.8  # Affiliation similarity (0-1)
+  
+  # Scoring weights (should sum to 1.0)
+  author_weight: 0.3              # Weight for author name matching (30%)
+  affiliation_weight: 0.7         # Weight for affiliation matching (70%)
+  
+  # Minimum score requirements
+  minimum_affiliation_score: 0.85  # Min affiliation score for fallback search
+  
+  # Institution search settings
+  use_institution_search: true     # Use institution-first search strategy
+  use_ror_api: true               # Use ROR API for institution resolution
   
   # Embedding model for semantic affiliation matching
   use_embedding_model: true

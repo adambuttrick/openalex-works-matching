@@ -1,0 +1,125 @@
+# ----------------------------------------------------
+# Configuration for UKRI Author-Affiliation Matching
+# ----------------------------------------------------
+
+# --- Matching Mode Settings ---
+matching:
+  # Mode: 'title' for title-based matching, 'author_affiliation' for author-affiliation matching
+  mode: "author_affiliation"
+  
+  # Author name parsing style
+  # Options: 'auto', 'last_comma_first', 'first_last', 'last_initial', 'first_initial_last'
+  # UKRI format is "LastName Initial" (e.g., "Smith J", "De La Cruz A")
+  author_name_style: "last_initial"
+  
+  # Separator for multiple authors in the input (if applicable)
+  author_separator: ";"
+  
+  # Fuzzy matching thresholds (0.0 to 1.0)
+  name_matching_threshold: 0.85      # Threshold for author name similarity
+  affiliation_matching_threshold: 0.8 # Threshold for affiliation similarity
+  
+  # Scoring weights for combining author and affiliation matches
+  # These should sum to 1.0 for normalized scores
+  author_weight: 0.3          # Weight given to author name matching (30%)
+  affiliation_weight: 0.7     # Weight given to affiliation matching (70%)
+  
+  # Minimum affiliation score required to consider a match valid (for fallback search)
+  # Helps prevent false positives by requiring high confidence
+  minimum_affiliation_score: 0.85  # Only accept matches with >= 85% affiliation similarity
+  
+  # Institution search settings
+  use_institution_search: true  # Try to resolve institution first before author search
+  use_ror_api: true            # Use ROR API as fallback for institution resolution
+  
+  # Embedding model settings for semantic affiliation matching
+  use_embedding_model: true          # Enable semantic affiliation matching
+  embedding_model_path: "cometadata/affiliation-clustering-0.3b"  # HuggingFace model
+  embedding_similarity_threshold: 0.65  # Cosine similarity threshold for embeddings (lower to catch abbreviations)
+  
+  # Search settings
+  max_results_per_author: 100  # Maximum number of works to retrieve per author search
+  year_search_window: 5      # Optional: limit years to search forward (commented = no limit)
+
+# --- Input Settings ---
+input:
+  # Path to the UKRI CSV file
+  path: "ukri_sampled_1000_rows_input.csv"
+  
+  # Input file format: 'csv' or 'json'
+  format: "csv"
+  
+  # Field mappings from UKRI CSV to standard fields
+  mappings:
+    # Map ProjectReference to award_id for grant matching
+    award_id: "ProjectReference"
+    
+    # Map author name field
+    authors: "Author"
+    
+    # Map institution/affiliation field - Lead Research Organization
+    affiliation: "LeadRO"
+    
+    # Map year field for publication year filtering
+    year: "Year"
+
+# --- Output Settings ---
+output:
+  # Path to the output file
+  path: "results_ukri_author_affiliation.csv"
+  
+  # Output file format: 'csv' or 'json'
+  format: "csv"
+
+# --- API & Matching Settings ---
+api:
+  # REQUIRED: Email address for OpenAlex polite pool access
+  mailto: "name@organzization.org"
+  
+  # Title similarity threshold (still used for fallback if needed)
+  similarity_threshold: 95
+  
+  # Multiple IDs to check for any of the child funding bodies
+  target_funder_ids:
+    - "https://openalex.org/F4320306076"
+    - "https://openalex.org/F4320309095"
+    - "https://openalex.org/F4320309096"
+    - "https://openalex.org/F4320309097"
+    - "https://openalex.org/F4320309098"
+    - "https://openalex.org/F4320309099"
+    - "https://openalex.org/F4320309100"
+    - "https://openalex.org/F4320309101"
+    - "https://openalex.org/F4320309102"
+    - "https://openalex.org/F4320314731"
+    - "https://openalex.org/F4320334609"
+    - "https://openalex.org/F4320334629"
+    - "https://openalex.org/F4320334630"
+    - "https://openalex.org/F4320334627"
+    - "https://openalex.org/F4320335087"
+    - "https://openalex.org/F4320334626"
+    - "https://openalex.org/F4320334631"
+    - "https://openalex.org/F4320336061"
+    - "https://openalex.org/F4320334632"
+  
+  # API error tracking settings
+  error_tracking:
+    # Maximum error rate before stopping (0.0-1.0)
+    max_error_rate: 0.8
+    
+    # Time window for tracking errors (seconds)
+    window_seconds: 300
+    
+    # Minimum attempts before checking health
+    min_attempts: 10
+    
+    # Maximum consecutive failures before stopping
+    max_consecutive_failures: 5
+
+# --- Processing Settings ---
+processing:
+  # Optional: Limit number of records to process (for testing)
+  # Remove or set to null to process all records
+  # limit: 5
+  
+  # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: "INFO"

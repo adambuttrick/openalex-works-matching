@@ -163,6 +163,11 @@ class AuthorAffiliationProcessor:
         self.affiliation_threshold = config.get_affiliation_matching_threshold()
         self.max_results_per_author = config.get_max_results_per_author()
         self.year_window = config.get_year_search_window()
+        self.author_weight = config.get_author_weight()
+        self.affiliation_weight = config.get_affiliation_weight()
+        self.minimum_affiliation_score = config.get_minimum_affiliation_score()
+        self.use_institution_search = config.use_institution_search()
+        self.use_ror_api = config.use_ror_api()
         
         if embedding_model:
             self.affiliation_threshold = config.get_embedding_similarity_threshold()
@@ -216,7 +221,12 @@ class AuthorAffiliationProcessor:
                 affiliation_threshold=self.affiliation_threshold,
                 max_results=self.max_results_per_author,
                 embedding_model=self.embedding_model,
-                year_window=self.year_window
+                year_window=self.year_window,
+                author_weight=self.author_weight,
+                affiliation_weight=self.affiliation_weight,
+                minimum_affiliation_score=self.minimum_affiliation_score,
+                use_institution_search=self.use_institution_search,
+                use_ror_api=self.use_ror_api
             )
             
             if matched_works:
