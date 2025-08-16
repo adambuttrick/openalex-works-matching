@@ -629,6 +629,9 @@ class OpenAlexClient:
             logging.warning("No institution ID or ROR ID provided for filtered search")
             return []
         
+        if ',' in surname:
+            surname = surname.split(',')[0].strip()
+        
         url = f"{self.BASE_URL}/authors"
         
         filter_parts = [f'display_name.search:{surname}']
