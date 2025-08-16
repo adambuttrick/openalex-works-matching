@@ -1,6 +1,7 @@
 import re
 import time
 import logging
+import urllib.parse
 import requests
 from functools import wraps
 from collections import deque
@@ -572,11 +573,9 @@ class OpenAlexClient:
         return None
     
     def search_ror_affiliation(self, affiliation_text):
-        """Search for an institution in ROR by affiliation text."""
         if not affiliation_text:
             return None
         
-        import urllib.parse
         encoded_affiliation = urllib.parse.quote(affiliation_text)
         url = f"https://api.ror.org/v2/organizations?affiliation={encoded_affiliation}"
         
@@ -594,31 +593,27 @@ class OpenAlexClient:
             if not items:
                 return None
             
-            # Look for the best match (highest score with chosen=true preferred)
-            best_match = None
+            chosen_match = None
             for item in items:
                 if item.get('chosen', False):
-                    best_match = item
+                    chosen_match = item
                     break
-                if not best_match or item.get('score', 0) > best_match.get('score', 0):
-                    best_match = item
             
-            if best_match:
-                org = best_match.get('organization', {})
+            if chosen_match:
+                org = chosen_match.get('organization', {})
                 ror_id = org.get('id', '').replace('https://ror.org/', '')
                 name = org.get('name')
-                score = best_match.get('score', 0)
+                score = chosen_match.get('score', 0)
                 
-                if score >= 0.7:  # ROR recommends considering matches above 0.7
-                    logging.info(f"Found ROR match: {name} (ROR: {ror_id}, score: {score:.2f})")
-                    return {
-                        'ror': ror_id,
-                        'display_name': name,
-                        'score': score,
-                        'chosen': best_match.get('chosen', False)
-                    }
+                logging.info(f"Found ROR chosen match: {name} (ROR: {ror_id}, score: {score:.2f})")
+                return {
+                    'ror': ror_id,
+                    'display_name': name,
+                    'score': score,
+                    'chosen': True
+                }
             
-            logging.info(f"No sufficiently confident ROR match found for: {affiliation_text}")
+            logging.info(f"No chosen ROR match found for: {affiliation_text}")
             return None
             
         except Exception as e:
@@ -627,7 +622,6 @@ class OpenAlexClient:
     
     @timer_decorator
     def search_authors_by_institution(self, surname, institution_id=None, ror_id=None):
-        """Search for authors by surname filtered by institution."""
         if not surname:
             return []
         
@@ -637,7 +631,6 @@ class OpenAlexClient:
         
         url = f"{self.BASE_URL}/authors"
         
-        # Build filter string
         filter_parts = [f'display_name.search:{surname}']
         if institution_id:
             filter_parts.append(f'affiliations.institution.id:I{institution_id}')
@@ -677,28 +670,22 @@ class OpenAlexClient:
             embedding_model=embedding_model
         )
         
-        # Extract surname for institution-based search
         surname = matcher.extract_surname(author_name, author_style)
         
-        # Try institution-first approach if enabled
         if use_institution_search and affiliation:
             logging.info(f"Attempting institution-first search for '{author_name}' at '{affiliation}'")
             
-            # Step 1: Try to find the institution
             institution_info = self.search_institution(affiliation, embedding_model, affiliation_threshold)
             
-            # Step 2: If OpenAlex search fails, try ROR API
             if not institution_info and use_ror_api:
                 logging.info("OpenAlex institution search failed, trying ROR API")
                 ror_result = self.search_ror_affiliation(affiliation)
                 if ror_result:
                     institution_info = ror_result
             
-            # Step 3: If we found an institution, search for authors there
             if institution_info:
                 logging.info(f"Found institution: {institution_info.get('display_name')} (score: {institution_info.get('score', 0):.2f})")
                 
-                # Search for authors with the surname at this institution
                 author_results = self.search_authors_by_institution(
                     surname, 
                     institution_id=institution_info.get('id'),
@@ -706,7 +693,6 @@ class OpenAlexClient:
                 )
                 
                 if author_results:
-                    # Step 4: Name disambiguation if multiple matches
                     best_author = None
                     best_score = 0
                     
@@ -726,7 +712,6 @@ class OpenAlexClient:
                         author_id = best_author.get('id', '').split('/')[-1] if best_author.get('id') else None
                         logging.info(f"Selected best matching author: {best_author.get('display_name')} (score: {best_score:.2f})")
                         
-                        # Step 5: Get works for this author
                         matched_works = self._get_author_works_at_institution(
                             author_id, 
                             author_name=best_author.get('display_name'),
@@ -740,14 +725,12 @@ class OpenAlexClient:
                             affiliation_score=institution_info.get('score', 1.0)
                         )
                         
-                        if matched_works:
-                            return matched_works
+                        return matched_works
                 
                 logging.info("No matching authors found at the institution, falling back to general search")
             else:
                 logging.info("Could not resolve institution, falling back to general search")
         
-        # Fall back to the original surname-based search logic
         logging.info(f"Using fallback search strategy for '{author_name}'")
         return self._search_by_author_affiliation_fallback(
             author_name, affiliation, year,
@@ -761,11 +744,9 @@ class OpenAlexClient:
                                          year=None, year_window=None, max_results=50,
                                          author_weight=0.3, affiliation_weight=0.7,
                                          author_score=1.0, affiliation_score=1.0):
-        """Get works for a specific author at a specific institution."""
         if not author_id:
             return []
         
-        # Build year filter
         year_filter = ""
         if year:
             try:
@@ -781,7 +762,12 @@ class OpenAlexClient:
             except (ValueError, TypeError):
                 logging.warning(f"Invalid year value: {year}")
         
-        # Get works
+        institution_filter = ""
+        if institution_info.get('id'):
+            institution_filter = f',authorships.institutions.id:I{institution_info["id"]}'
+        elif institution_info.get('ror'):
+            institution_filter = f',authorships.institutions.ror:{institution_info["ror"]}'
+        
         url = f"{self.BASE_URL}/works"
         cursor = '*'
         all_works = []
@@ -789,7 +775,7 @@ class OpenAlexClient:
         
         while cursor and (not max_results or len(all_works) < max_results):
             params = {
-                'filter': f'author.id:{author_id}{year_filter}',
+                'filter': f'authorships.author.id:{author_id}{institution_filter}{year_filter}',
                 'per_page': 200,
                 'cursor': cursor
             }
@@ -809,9 +795,8 @@ class OpenAlexClient:
             else:
                 break
         
-        logging.info(f"Found {len(all_works)} works for author {author_name}")
+        logging.info(f"Found {len(all_works)} works for author {author_name} at {institution_info.get('display_name')}")
         
-        # Format results
         matched_works = []
         weighted_score = (author_score * author_weight) + (affiliation_score * affiliation_weight)
         
@@ -820,7 +805,7 @@ class OpenAlexClient:
                 'work': work,
                 'matched_author': author_name,
                 'matched_author_id': author_id,
-                'matched_author_orcid': '',  # Would need to get from author data
+                'matched_author_orcid': '',
                 'matched_affiliation': institution_info.get('display_name'),
                 'matched_affiliation_id': institution_info.get('id'),
                 'matched_affiliation_ror': institution_info.get('ror'),
@@ -842,7 +827,6 @@ class OpenAlexClient:
 
         author_search_query = author_name
 
-        # Convert to "Given Name Surname" format based on the configured style
         if author_style == 'last_comma_first' or (',' in author_search_query):
             # Format: "Smith, John" -> "John Smith"
             parts = author_search_query.split(',', 1)
@@ -1053,7 +1037,6 @@ class OpenAlexClient:
                             best_affiliation_ror = inst_ror
                             best_affiliation_score = aff_score
 
-            # Require high confidence affiliation match to avoid false positives
             if best_author_match and best_affiliation_match and best_affiliation_score >= minimum_affiliation_score:
                 weighted_score = (best_author_score * author_weight) + (best_affiliation_score * affiliation_weight)
                 
