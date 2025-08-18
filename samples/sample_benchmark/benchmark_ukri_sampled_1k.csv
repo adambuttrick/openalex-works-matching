@@ -1,4 +1,4 @@
-award_id,doi,openalex_work_id,title
+grant_id,doi,openalex_work_id,title
 BB/G022917/1,10.1242/jeb.240812,https://openalex.org/W3133084865,Thresholds of polarization vision in octopuses.
 NE/V002554/2,10.1029/2021ja029337,https://openalex.org/W3176874614,The Roles of the Magnetopause and Plasmapause in Storm-Time ULF Wave Power Enhancements
 NE/C004566/1,10.1021/acs.est.5b06178,https://openalex.org/W2218872612,Structural Fe(II) Oxidation in Biotite by an Ectomycorrhizal Fungi Drives Mechanical Forcing.
