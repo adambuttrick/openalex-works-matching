@@ -351,9 +351,6 @@ Sample output: One row per input record with matched OpenAlex metadata.
 ```bash
 # Search for publications by author and institution
 python main.py -c samples/sample_config/config_nserc_author_affiliation.yaml
-
-# Process first 10 records only
-python main.py -c samples/sample_config/config_nserc_author_affiliation.yaml
 ```
 
 Sample input (CSV):
