@@ -44,7 +44,7 @@ matching:
 # --- Input Settings ---
 input:
   # Path to the UKRI CSV file
-  path: "ukri_sampled_1000_rows_input.csv"
+  path: "samples/sample_input/input_ukri_author_affiliation.csv"
   
   # Input file format: 'csv' or 'json'
   format: "csv"
