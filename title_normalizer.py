@@ -87,7 +87,6 @@ def extract_date_from_title(title):
         if parsed_date:
             extracted_date = parsed_date
             date_format = format_type
-            # Remove the date from the title
             title = title[match.end():].strip()
             return title, extracted_date, date_format
     
@@ -101,7 +100,6 @@ def extract_date_from_title(title):
         if parsed_date:
             extracted_date = parsed_date
             date_format = format_type
-            # Remove the date from the title
             title = title[:match.start()].strip()
             return title, extracted_date, date_format
     
@@ -193,6 +191,16 @@ def extract_main_title(title):
 
     if not title:
         return original
+    
+    return title.strip()
+
+
+def sanitize_for_openalex_search(title):
+    if not title:
+        return ""
+    
+    title = title.translate(str.maketrans('|+', '  ', '*?~^\\{}[]'))
+    title = ' '.join(title.split())
     
     return title.strip()
 

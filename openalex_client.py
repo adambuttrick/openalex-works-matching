@@ -7,7 +7,7 @@ from functools import wraps
 from collections import deque
 from thefuzz import fuzz
 from ratelimit import limits, sleep_and_retry
-from title_normalizer import clean_title_for_search, normalize_text
+from title_normalizer import clean_title_for_search, normalize_text, sanitize_for_openalex_search
 from author_affiliation_matcher import AuthorAffiliationMatcher
 
 
@@ -15,14 +15,51 @@ class APIHealthError(Exception):
     pass
 
 
+class InvalidRequestError(Exception):
+    def __init__(self, message, status_code=None, response_text=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
+
+
+class RateLimitError(Exception):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class ServerError(Exception):
+    def __init__(self, message, status_code=None, response_text=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
+
+
 class APIErrorTracker:
-    def __init__(self, max_error_rate=0.8, window_seconds=300, min_attempts=10, max_consecutive_failures=5):
+    def __init__(self, max_error_rate=0.8, window_seconds=300, min_attempts=10,
+                 max_consecutive_failures=5, max_client_error_rate=0.5,
+                 max_server_error_rate=0.3, max_consecutive_client_errors=10,
+                 max_consecutive_server_errors=5, max_consecutive_rate_limits=3):
         self.max_error_rate = max_error_rate
         self.window_seconds = window_seconds
         self.min_attempts = min_attempts
         self.max_consecutive_failures = max_consecutive_failures
+        self.max_client_error_rate = max_client_error_rate
+        self.max_server_error_rate = max_server_error_rate
+        self.max_consecutive_client_errors = max_consecutive_client_errors
+        self.max_consecutive_server_errors = max_consecutive_server_errors
+        self.max_consecutive_rate_limits = max_consecutive_rate_limits
+
         self.history = deque()
         self.consecutive_failures = 0
+
+        self.consecutive_client_errors = 0
+        self.consecutive_server_errors = 0
+        self.consecutive_rate_limits = 0
+
+        self.client_error_history = deque()
+        self.server_error_history = deque()
+        self.rate_limit_history = deque()
 
     def _clean_old_entries(self):
         current_time = time.time()
@@ -31,19 +68,67 @@ class APIErrorTracker:
         while self.history and self.history[0][0] < cutoff_time:
             self.history.popleft()
 
-    def record_attempt(self, success):
+        while self.client_error_history and self.client_error_history[0] < cutoff_time:
+            self.client_error_history.popleft()
+
+        while self.server_error_history and self.server_error_history[0] < cutoff_time:
+            self.server_error_history.popleft()
+
+        while self.rate_limit_history and self.rate_limit_history[0] < cutoff_time:
+            self.rate_limit_history.popleft()
+
+    def record_attempt(self, success, error_type=None):
         current_time = time.time()
 
         if success:
             self.consecutive_failures = 0
+            self.consecutive_client_errors = 0
+            self.consecutive_server_errors = 0
+            self.consecutive_rate_limits = 0
         else:
-            self.consecutive_failures += 1
+            if error_type is None:
+                self.consecutive_failures += 1
+
+            if error_type == 'client_error':
+                self.consecutive_client_errors += 1
+                self.consecutive_server_errors = 0
+                self.consecutive_rate_limits = 0
+                self.consecutive_failures = 0
+                self.client_error_history.append(current_time)
+            elif error_type == 'server_error':
+                self.consecutive_server_errors += 1
+                self.consecutive_client_errors = 0
+                self.consecutive_rate_limits = 0
+                self.server_error_history.append(current_time)
+            elif error_type == 'rate_limit':
+                self.consecutive_rate_limits += 1
+                self.consecutive_client_errors = 0
+                self.consecutive_server_errors = 0
+                self.rate_limit_history.append(current_time)
 
         self.history.append((current_time, success))
 
         self._clean_old_entries()
 
     def check_health(self):
+        if self.consecutive_client_errors >= self.max_consecutive_client_errors:
+            raise InvalidRequestError(
+                f"Too many consecutive client errors ({self.consecutive_client_errors}) - "
+                f"check your request parameters"
+            )
+
+        if self.consecutive_server_errors >= self.max_consecutive_server_errors:
+            raise ServerError(
+                f"OpenAlex API experiencing server issues - "
+                f"{self.consecutive_server_errors} consecutive server errors"
+            )
+
+        if self.consecutive_rate_limits >= self.max_consecutive_rate_limits:
+            raise RateLimitError(
+                f"Persistent rate limiting - "
+                f"{self.consecutive_rate_limits} consecutive rate limit errors"
+            )
+
         if self.consecutive_failures >= self.max_consecutive_failures:
             raise APIHealthError(
                 f"OpenAlex API appears to be down - "
@@ -65,6 +150,22 @@ class APIErrorTracker:
                 f"{failures}/{total_attempts} failures ({error_rate:.1%}) in last {self.window_seconds}s"
             )
 
+        if len(self.client_error_history) > 0:
+            client_error_rate = len(self.client_error_history) / total_attempts
+            if client_error_rate >= self.max_client_error_rate:
+                raise InvalidRequestError(
+                    f"High client error rate - "
+                    f"{len(self.client_error_history)}/{total_attempts} ({client_error_rate:.1%}) in last {self.window_seconds}s"
+                )
+
+        if len(self.server_error_history) > 0:
+            server_error_rate = len(self.server_error_history) / total_attempts
+            if server_error_rate >= self.max_server_error_rate:
+                raise ServerError(
+                    f"High server error rate - "
+                    f"{len(self.server_error_history)}/{total_attempts} ({server_error_rate:.1%}) in last {self.window_seconds}s"
+                )
+
     def get_stats(self):
         self._clean_old_entries()
 
@@ -75,7 +176,18 @@ class APIErrorTracker:
         failures = sum(1 for _, success in self.history if not success)
         success_rate = (total - failures) / total * 100
 
-        return f"{total} attempts, {success_rate:.1f}% success rate"
+        stats = f"{total} attempts, {success_rate:.1f}% success rate"
+
+        if self.client_error_history:
+            stats += f", {len(self.client_error_history)} client errors"
+
+        if self.server_error_history:
+            stats += f", {len(self.server_error_history)} server errors"
+
+        if self.rate_limit_history:
+            stats += f", {len(self.rate_limit_history)} rate limits"
+
+        return stats
 
 
 def timer_decorator(func):
@@ -132,26 +244,68 @@ class OpenAlexClient:
                 elif response.status_code == 404:
                     self.error_tracker.record_attempt(True)
                     return None
+                elif response.status_code in [400, 403]:
+                    response_text = response.text[:500] if response.text else "No response body"
+                    logging.warning(f"OpenAlex API client error {response.status_code}: {response_text}")
+                    self.error_tracker.record_attempt(False, 'client_error')
+
+                    try:
+                        self.error_tracker.check_health()
+                    except InvalidRequestError:
+                        raise
+                    except (RateLimitError, ServerError, APIHealthError) as e:
+                        raise
+
+                    raise InvalidRequestError(
+                        f"Invalid request (HTTP {response.status_code})",
+                        status_code=response.status_code,
+                        response_text=response_text
+                    )
                 elif response.status_code == 429:
-                    logging.warning(f"Rate limit hit, waiting {retry_delay * 2} seconds")
-                    time.sleep(retry_delay * 2)
+                    retry_after = response.headers.get(
+                        'Retry-After', retry_delay * 2)
+                    try:
+                        retry_after = int(retry_after)
+                    except (ValueError, TypeError):
+                        retry_after = retry_delay * 2
+
+                    logging.warning(f"Rate limit hit, waiting {retry_after} seconds")
+                    self.error_tracker.record_attempt(False, 'rate_limit')
+
+                    try:
+                        self.error_tracker.check_health()
+                    except RateLimitError as e:
+                        raise
+
+                    time.sleep(retry_after)
                     continue
+                elif response.status_code >= 500:
+                    response_text = response.text[:500] if response.text else "No response body"
+                    logging.warning(f"OpenAlex API server error {response.status_code}: {response_text}")
+                    self.error_tracker.record_attempt(False, 'server_error')
                 else:
                     logging.warning(f"OpenAlex API error: {response.status_code}")
                     self.error_tracker.record_attempt(False)
 
+            except InvalidRequestError:
+                raise
+            except RateLimitError:
+                raise
+            except ServerError:
+                raise
             except requests.exceptions.Timeout:
                 logging.warning(f"OpenAlex API timeout (attempt {attempt + 1}/{max_retries})")
-                self.error_tracker.record_attempt(False)
+                self.error_tracker.record_attempt(False, 'server_error')
             except requests.exceptions.RequestException as e:
                 logging.warning(f"OpenAlex API request error: {e}")
                 self.error_tracker.record_attempt(False)
             except Exception as e:
                 logging.error(f"Unexpected error in OpenAlex API call: {e}")
                 self.error_tracker.record_attempt(False)
+
             try:
                 self.error_tracker.check_health()
-            except APIHealthError as e:
+            except (InvalidRequestError, RateLimitError, ServerError, APIHealthError) as e:
                 logging.error(f"API health check failed: {e}")
                 raise
 
@@ -191,9 +345,10 @@ class OpenAlexClient:
             if result:
                 return result
 
-        logging.debug(f"Strategy 4 - Searching with raw title: {original_title}")
+        sanitized_title = sanitize_for_openalex_search(original_title)
+        logging.debug(f"Strategy 4 - Searching with sanitized raw title: {sanitized_title}")
         result = self._search_and_match(
-            original_title, original_title, max_results, "raw_title", year)
+            sanitized_title, original_title, max_results, "raw_title", year)
         if result:
             return result
 
@@ -276,6 +431,27 @@ class OpenAlexClient:
 
         url = f"{self.BASE_URL}/works/{work_id}"
         return self._make_request(url)
+
+    @timer_decorator
+    def fetch_work_by_doi(self, doi_string):
+        from doi_parser import extract_doi
+
+        doi = extract_doi(doi_string)
+        if not doi:
+            logging.info(f"No valid DOI found in URL: {doi_string[:100] if doi_string else 'empty'}")
+            return None
+
+        url = f"{self.BASE_URL}/works/https://doi.org/{doi}"
+        logging.info(f"Valid DOI extracted ({doi}), querying OpenAlex...")
+
+        work_data = self._make_request(url)
+
+        if work_data:
+            logging.info(f"Successfully retrieved work via DOI: {doi}")
+            return work_data
+        else:
+            logging.info(f"No OpenAlex work found for valid DOI: {doi}")
+            return None
 
     def extract_metadata(self, work_data, target_funder_ids=None,
                          award_id=None):
@@ -505,33 +681,33 @@ class OpenAlexClient:
     def search_institution(self, institution_name, embedding_model=None, threshold=0.8):
         if not institution_name:
             return None
-        
+
         url = f"{self.BASE_URL}/institutions"
         params = {
             'search': institution_name,
             'per_page': 10
         }
-        
+
         logging.info(f"Searching for institution: '{institution_name}'")
         data = self._make_request(url, params)
-        
+
         if not data or 'results' not in data:
             logging.info(f"No institutions found matching: {institution_name}")
             return None
-        
+
         results = data.get('results', [])
         if not results:
             return None
-        
+
         if embedding_model:
             best_match = None
             best_score = 0
-            
+
             for inst in results:
                 inst_name = inst.get('display_name', '')
                 if not inst_name:
                     continue
-                
+
                 try:
                     _, score = embedding_model.match_affiliation(
                         institution_name, inst_name, threshold
@@ -541,9 +717,10 @@ class OpenAlexClient:
                         best_match = inst
                 except Exception as e:
                     logging.warning(f"Embedding comparison failed: {e}")
-            
+
             if best_match and best_score >= threshold:
-                inst_id = best_match.get('id', '').split('/')[-1] if best_match.get('id') else None
+                inst_id = best_match.get('id', '').split(
+                    '/')[-1] if best_match.get('id') else None
                 ror_id = best_match.get('ror')
                 logging.info(f"Found institution match: {best_match.get('display_name')} (score: {best_score:.2f})")
                 return {
@@ -555,11 +732,13 @@ class OpenAlexClient:
         else:
             first_result = results[0]
             inst_name = first_result.get('display_name', '')
-            
-            similarity = fuzz.ratio(institution_name.lower(), inst_name.lower()) / 100.0
-            
+
+            similarity = fuzz.ratio(
+                institution_name.lower(), inst_name.lower()) / 100.0
+
             if similarity >= threshold:
-                inst_id = first_result.get('id', '').split('/')[-1] if first_result.get('id') else None
+                inst_id = first_result.get('id', '').split(
+                    '/')[-1] if first_result.get('id') else None
                 ror_id = first_result.get('ror')
                 logging.info(f"Found institution match: {inst_name} (score: {similarity:.2f})")
                 return {
@@ -568,43 +747,43 @@ class OpenAlexClient:
                     'display_name': inst_name,
                     'score': similarity
                 }
-        
+
         logging.info(f"No sufficiently similar institution found for: {institution_name}")
         return None
-    
+
     def search_ror_affiliation(self, affiliation_text):
         if not affiliation_text:
             return None
-        
+
         encoded_affiliation = urllib.parse.quote(affiliation_text)
         url = f"https://api.ror.org/v2/organizations?affiliation={encoded_affiliation}"
-        
+
         try:
             logging.info(f"Searching ROR for affiliation: '{affiliation_text}'")
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
-            
+
             if not data or 'items' not in data:
                 logging.info(f"No ROR matches found for: {affiliation_text}")
                 return None
-            
+
             items = data.get('items', [])
             if not items:
                 return None
-            
+
             chosen_match = None
             for item in items:
                 if item.get('chosen', False):
                     chosen_match = item
                     break
-            
+
             if chosen_match:
                 org = chosen_match.get('organization', {})
                 ror_id = org.get('id', '').replace('https://ror.org/', '')
                 name = org.get('name')
                 score = chosen_match.get('score', 0)
-                
+
                 logging.info(f"Found ROR chosen match: {name} (ROR: {ror_id}, score: {score:.2f})")
                 return {
                     'ror': ror_id,
@@ -612,49 +791,50 @@ class OpenAlexClient:
                     'score': score,
                     'chosen': True
                 }
-            
+
             logging.info(f"No chosen ROR match found for: {affiliation_text}")
             return None
-            
+
         except Exception as e:
             logging.warning(f"ROR API request failed: {e}")
             return None
-    
+
     @timer_decorator
     def search_authors_by_institution(self, surname, institution_id=None, ror_id=None):
         if not surname:
             return []
-        
+
         if not institution_id and not ror_id:
-            logging.warning("No institution ID or ROR ID provided for filtered search")
+            logging.warning(
+                "No institution ID or ROR ID provided for filtered search")
             return []
-        
+
         if ',' in surname:
             surname = surname.split(',')[0].strip()
-        
+
         url = f"{self.BASE_URL}/authors"
-        
+
         filter_parts = [f'display_name.search:{surname}']
         if institution_id:
             filter_parts.append(f'affiliations.institution.id:I{institution_id}')
         elif ror_id:
             filter_parts.append(f'affiliations.institution.ror:{ror_id}')
-        
+
         params = {
             'filter': ','.join(filter_parts),
             'per_page': 50
         }
-        
+
         logging.info(f"Searching for authors with surname '{surname}' at institution (ID: {institution_id}, ROR: {ror_id})")
         data = self._make_request(url, params)
-        
+
         if not data or 'results' not in data:
             logging.info(f"No authors found matching criteria")
             return []
-        
+
         results = data.get('results', [])
         logging.info(f"Found {len(results)} authors with surname '{surname}' at the institution")
-        
+
         return results
 
     @timer_decorator
@@ -672,33 +852,35 @@ class OpenAlexClient:
             name_matching_threshold=name_threshold,
             embedding_model=embedding_model
         )
-        
+
         surname = matcher.extract_surname(author_name, author_style)
-        
+
         if use_institution_search and affiliation:
             logging.info(f"Attempting institution-first search for '{author_name}' at '{affiliation}'")
-            
-            institution_info = self.search_institution(affiliation, embedding_model, affiliation_threshold)
-            
+
+            institution_info = self.search_institution(
+                affiliation, embedding_model, affiliation_threshold)
+
             if not institution_info and use_ror_api:
-                logging.info("OpenAlex institution search failed, trying ROR API")
+                logging.info(
+                    "OpenAlex institution search failed, trying ROR API")
                 ror_result = self.search_ror_affiliation(affiliation)
                 if ror_result:
                     institution_info = ror_result
-            
+
             if institution_info:
                 logging.info(f"Found institution: {institution_info.get('display_name')} (score: {institution_info.get('score', 0):.2f})")
-                
+
                 author_results = self.search_authors_by_institution(
-                    surname, 
+                    surname,
                     institution_id=institution_info.get('id'),
                     ror_id=institution_info.get('ror')
                 )
-                
+
                 if author_results:
                     best_author = None
                     best_score = 0
-                    
+
                     for author in author_results:
                         author_display_name = author.get('display_name', '')
                         is_similar, score = matcher.are_names_similar(
@@ -706,17 +888,18 @@ class OpenAlexClient:
                             name1_style=author_style,
                             name2_style='first_last'
                         )
-                        
+
                         if is_similar and score > best_score:
                             best_score = score
                             best_author = author
-                    
+
                     if best_author:
-                        author_id = best_author.get('id', '').split('/')[-1] if best_author.get('id') else None
+                        author_id = best_author.get('id', '').split(
+                            '/')[-1] if best_author.get('id') else None
                         logging.info(f"Selected best matching author: {best_author.get('display_name')} (score: {best_score:.2f})")
-                        
+
                         matched_works = self._get_author_works_at_institution(
-                            author_id, 
+                            author_id,
                             author_name=best_author.get('display_name'),
                             institution_info=institution_info,
                             year=year,
@@ -725,15 +908,18 @@ class OpenAlexClient:
                             author_weight=author_weight,
                             affiliation_weight=affiliation_weight,
                             author_score=best_score,
-                            affiliation_score=institution_info.get('score', 1.0)
+                            affiliation_score=institution_info.get(
+                                'score', 1.0)
                         )
-                        
+
                         return matched_works
-                
-                logging.info("No matching authors found at the institution, falling back to general search")
+
+                logging.info(
+                    "No matching authors found at the institution, falling back to general search")
             else:
-                logging.info("Could not resolve institution, falling back to general search")
-        
+                logging.info(
+                    "Could not resolve institution, falling back to general search")
+
         logging.info(f"Using fallback search strategy for '{author_name}'")
         return self._search_by_author_affiliation_fallback(
             author_name, affiliation, year,
@@ -742,14 +928,14 @@ class OpenAlexClient:
             author_weight, affiliation_weight, minimum_affiliation_score,
             matcher
         )
-    
+
     def _get_author_works_at_institution(self, author_id, author_name, institution_info,
                                          year=None, year_window=None, max_results=50,
                                          author_weight=0.3, affiliation_weight=0.7,
                                          author_score=1.0, affiliation_score=1.0):
         if not author_id:
             return []
-        
+
         year_filter = ""
         if year:
             try:
@@ -764,45 +950,46 @@ class OpenAlexClient:
                     year_filter = f',publication_year:{start_year}-{end_year}'
             except (ValueError, TypeError):
                 logging.warning(f"Invalid year value: {year}")
-        
+
         institution_filter = ""
         if institution_info.get('id'):
             institution_filter = f',authorships.institutions.id:I{institution_info["id"]}'
         elif institution_info.get('ror'):
             institution_filter = f',authorships.institutions.ror:{institution_info["ror"]}'
-        
+
         url = f"{self.BASE_URL}/works"
         cursor = '*'
         all_works = []
         page_count = 0
-        
+
         while cursor and (not max_results or len(all_works) < max_results):
             params = {
                 'filter': f'authorships.author.id:{author_id}{institution_filter}{year_filter}',
                 'per_page': 200,
                 'cursor': cursor
             }
-            
+
             data = self._make_request(url, params)
-            
+
             if data:
                 works = data.get('results', [])
                 all_works.extend(works)
                 page_count += 1
                 meta = data.get('meta', {})
                 cursor = meta.get('next_cursor')
-                
+
                 if max_results and len(all_works) >= max_results:
                     all_works = all_works[:max_results]
                     break
             else:
                 break
-        
+
         logging.info(f"Found {len(all_works)} works for author {author_name} at {institution_info.get('display_name')}")
-        
+
         matched_works = []
-        weighted_score = (author_score * author_weight) + (affiliation_score * affiliation_weight)
-        
+        weighted_score = (author_score * author_weight) + \
+            (affiliation_score * affiliation_weight)
+
         for work in all_works:
             matched_works.append({
                 'work': work,
@@ -816,10 +1003,10 @@ class OpenAlexClient:
                 'affiliation_match_score': affiliation_score,
                 'combined_score': weighted_score
             })
-        
+
         matched_works.sort(key=lambda x: x['combined_score'], reverse=True)
         return matched_works
-    
+
     def _search_by_author_affiliation_fallback(self, author_name, affiliation, year,
                                                author_style, name_threshold, affiliation_threshold,
                                                max_results, embedding_model, year_window,
@@ -831,13 +1018,10 @@ class OpenAlexClient:
         author_search_query = author_name
 
         if author_style == 'last_comma_first' or (',' in author_search_query):
-            # Format: "Smith, John" -> "John Smith"
             parts = author_search_query.split(',', 1)
             if len(parts) == 2:
                 last_name = parts[0].strip()
                 first_name = parts[1].strip()
-                # Add spaces in compound names that look to be mistakenly merged on the 
-                # basis of case, e.g. "ErnstLudwig" -> "Ernst Ludwig"
                 first_name = re.sub(r'([a-z])([A-Z])', r'\1 \2', first_name)
                 author_search_query = f"{first_name} {last_name}"
         elif author_style == 'last_first':
@@ -854,7 +1038,8 @@ class OpenAlexClient:
             parts = author_search_query.split()
             if len(parts) >= 2:
                 # Parse using our enhanced compound surname detection
-                surname_parts, initial_parts = AuthorAffiliationMatcher.parse_compound_surname_with_initial(parts)
+                surname_parts, initial_parts = AuthorAffiliationMatcher.parse_compound_surname_with_initial(
+                    parts)
                 if surname_parts and initial_parts:
                     last_name = ' '.join(surname_parts)
                     initial = initial_parts[0]
@@ -1021,7 +1206,7 @@ class OpenAlexClient:
                         inst_name = institution.get('display_name', '')
                         inst_id = institution.get('id', '')
                         inst_ror = institution.get('ror', '')
-                        
+
                         if not inst_name:
                             continue
 
@@ -1041,8 +1226,9 @@ class OpenAlexClient:
                             best_affiliation_score = aff_score
 
             if best_author_match and best_affiliation_match and best_affiliation_score >= minimum_affiliation_score:
-                weighted_score = (best_author_score * author_weight) + (best_affiliation_score * affiliation_weight)
-                
+                weighted_score = (best_author_score * author_weight) + \
+                    (best_affiliation_score * affiliation_weight)
+
                 matched_works.append({
                     'work': work,
                     'matched_author': best_author_match,
@@ -1069,7 +1255,7 @@ class OpenAlexClient:
                                        embedding_model=None, year_window=None,
                                        author_weight=0.3, affiliation_weight=0.7,
                                        minimum_affiliation_score=0.95):
-        
+
         all_results = {}
 
         for author_name, affiliation in author_affiliation_pairs:

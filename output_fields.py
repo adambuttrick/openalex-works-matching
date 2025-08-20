@@ -1,9 +1,10 @@
 INPUT_FIELDS = [
     'award_id',
-    'authors',
-    'affiliation',
-    'year',
     'title',
+    'url',
+    'year',
+    'authors',
+    'affiliation'
 ]
 
 MATCHING_FIELDS = [
@@ -12,6 +13,7 @@ MATCHING_FIELDS = [
     # Title-specific matching fields
     'match_ratio',
     'search_method',
+    'extracted_doi',
     'cleaned_title',
     'extracted_date',
     'date_format',
@@ -90,8 +92,8 @@ ALL_OUTPUT_FIELDS = (
 
 def get_output_fields_for_mode(matching_mode='title'):
     if matching_mode == 'author_affiliation':
-        exclude = {'title', 'cleaned_title', 'extracted_date', 'date_format', 
-                   'matched_title', 'match_ratio', 'search_method',
+        exclude = {'title', 'url', 'cleaned_title', 'extracted_date', 'date_format', 
+                   'matched_title', 'match_ratio', 'search_method', 'extracted_doi',
                    'matched_authors', 'matched_authors_count', 'matched_authors_list'}
         return [f for f in ALL_OUTPUT_FIELDS if f not in exclude]
     else:

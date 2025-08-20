@@ -1,5 +1,6 @@
 import os
 import yaml
+import logging
 
 
 class ConfigurationError(Exception):
@@ -113,6 +114,9 @@ class ConfigLoader:
     def get_field_mappings(self):
         return self.input_settings['mappings']
     
+    def get_url_field_mapping(self):
+        return self.input_settings['mappings'].get('url', None)
+    
     def get_records_path(self):
         return self.input_settings.get('records_path', '.')
     
@@ -127,7 +131,12 @@ class ConfigLoader:
             'max_error_rate': 0.8,
             'window_seconds': 300,
             'min_attempts': 10,
-            'max_consecutive_failures': 5
+            'max_consecutive_failures': 5,
+            'max_client_error_rate': 0.5,
+            'max_server_error_rate': 0.3,
+            'max_consecutive_client_errors': 10,
+            'max_consecutive_server_errors': 5,
+            'max_consecutive_rate_limits': 3
         }
         error_config = self.api_settings.get('error_tracking', {})
         default_config.update(error_config)

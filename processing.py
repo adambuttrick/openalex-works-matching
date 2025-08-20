@@ -13,6 +13,40 @@ class ProcessingEngine:
     
     def process_record(self, raw_record):
         result = dict(raw_record)
+        url_field = self.config.get_url_field_mapping()
+        logging.debug(f"URL field mapping: {url_field}")
+        if url_field:
+            url_value = raw_record.get('url')
+            logging.debug(f"URL field value: {url_value}")
+            if url_value:
+                logging.info(f"Processing URL for potential DOI extraction: {url_value[:100] if url_value else ''}")
+                
+                work_data = self.openalex_client.fetch_work_by_doi(url_value)
+                if work_data:
+                    result['match_status'] = 'matched'
+                    result['match_ratio'] = 100
+                    result['search_method'] = 'doi'
+                    result['matched_title'] = work_data.get('title', '')
+                    result['extracted_doi'] = work_data.get('doi', '')
+                    
+                    award_id = raw_record.get('award_id')
+                    metadata = self.openalex_client.extract_metadata(work_data, self.target_funder_ids, award_id)
+                    result.update(metadata)
+                    
+                    input_authors = raw_record.get('authors')
+                    if input_authors and metadata.get('authors'):
+                        author_match_result = self._match_authors(input_authors, metadata['authors'])
+                        result.update(author_match_result)
+                    
+                    input_year = raw_record.get('year')
+                    if input_year and metadata.get('publication_year'):
+                        year_match_result = self._validate_year(input_year, metadata['publication_year'])
+                        result.update(year_match_result)
+                    
+                    return [result]
+                else:
+                    logging.info("DOI retrieval failed, falling back to title search")
+        
         title = raw_record.get('title', '')
         if not title:
             logging.warning(f"No title found for record: {raw_record.get('award_id', 'unknown')}")
@@ -46,6 +80,7 @@ class ProcessingEngine:
         result['match_ratio'] = match_ratio
         result['search_method'] = search_method
         result['matched_title'] = work_data.get('title', '')
+        result['extracted_doi'] = ''
         
         award_id = raw_record.get('award_id')
         metadata = self.openalex_client.extract_metadata(work_data, self.target_funder_ids, award_id)
@@ -156,7 +191,6 @@ class AuthorAffiliationProcessor:
         self.config = config
         self.openalex_client = openalex_client
         self.target_funder_ids = config.get_target_funder_ids()
-        
         self.author_style = config.get_author_name_style()
         self.author_separator = config.get_author_separator()
         self.name_threshold = config.get_name_matching_threshold()

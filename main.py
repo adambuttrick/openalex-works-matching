@@ -7,7 +7,7 @@ from datetime import datetime
 
 from config import ConfigLoader, ConfigurationError
 from data_io import create_reader, create_writer
-from openalex_client import OpenAlexClient, APIHealthError
+from openalex_client import OpenAlexClient, APIHealthError, InvalidRequestError, RateLimitError, ServerError
 from processing import ProcessingEngine, AuthorAffiliationProcessor
 from output_fields import get_output_fields_for_mode
 
@@ -101,7 +101,6 @@ def main():
         logging.info(f"Input: {config.get_input_path()} (format: {config.get_input_format()})")
         logging.info(f"Output: {config.get_output_path()} (format: {config.get_output_format()})")
         
-        # Get matching mode
         matching_mode = config.get_matching_mode()
         logging.info(f"Matching mode: {matching_mode}")
         
@@ -199,6 +198,30 @@ def main():
                     if i % 10 == 0:
                         print(f"Processed {i} records... ({stats['matched']} matched)")
                     
+                except InvalidRequestError as e:
+                    logging.warning(f"Invalid request for record {i}: {e}")
+                    stats['errors'] += 1
+                    
+                    error_record = dict(record)
+                    error_record['error'] = f"Invalid request: {e}"
+                    error_record['match_status'] = 'invalid_request'
+                    
+                    if writer:
+                        writer.write_record(error_record)
+                    continue
+                
+                except RateLimitError as e:
+                    logging.error(f"Rate limiting detected: {e}")
+                    print(f"\nERROR: {e}")
+                    print("Stopping processing due to rate limiting.")
+                    break
+                
+                except ServerError as e:
+                    logging.error(f"Server error: {e}")
+                    print(f"\nERROR: {e}")
+                    print("Stopping processing due to server issues.")
+                    break
+                
                 except APIHealthError as e:
                     logging.error(f"API health check failed: {e}")
                     print(f"\nERROR: {e}")

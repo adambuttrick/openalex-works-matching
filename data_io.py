@@ -1,5 +1,6 @@
 import os
 import csv
+import copy
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -11,7 +12,6 @@ def get_nested_value(data, path):
 
     keys = path.split('.')
     value = data
-
     for key in keys:
         if isinstance(value, dict):
             value = value.get(key)
@@ -96,6 +96,21 @@ class JSONReader(DataReader):
                  records_path='.'):
         super().__init__(file_path, field_mappings)
         self.records_path = records_path
+        self._check_for_array_expansion()
+    
+    def _check_for_array_expansion(self):
+        self.requires_expansion = False
+        self.expansion_paths = set()
+        
+        for source_path in self.field_mappings.values():
+            if source_path:
+                parts = source_path.split('.')
+                for i, part in enumerate(parts[:-1]):
+                    next_part = parts[i + 1]
+                    if next_part.isdigit() or next_part == '*':
+                        array_path = '.'.join(parts[:i+1])
+                        self.expansion_paths.add(array_path)
+                        self.requires_expansion = True
 
     def read_records(self):
         with open(self.file_path, 'r', encoding='utf-8') as f:
@@ -111,17 +126,38 @@ class JSONReader(DataReader):
                 return
 
         for record in records:
-            products = record.get('products', [])
-            if products:
-                for product in products:
-                    combined_record = {
-                        'project_id': record.get('project_id'),
-                        'project_title': record.get('title'),
-                        **product
-                    }
-                    yield self.map_record(combined_record)
+            if self.requires_expansion and self.expansion_paths:
+                expanded_records = self._expand_record(record)
+                for expanded_record in expanded_records:
+                    yield self.map_record(expanded_record)
             else:
                 yield self.map_record(record)
+    
+    def _expand_record(self, record):
+        for expansion_path in self.expansion_paths:
+            array_data = get_nested_value(record, expansion_path)
+            if array_data and isinstance(array_data, list):
+                expanded_records = []
+                for idx, item in enumerate(array_data):
+                    expanded_record = copy.deepcopy(record)
+                    self._set_nested_value(expanded_record, expansion_path, [item])
+                    expanded_records.append(expanded_record)
+                
+                if expanded_records:
+                    return expanded_records
+        
+        return [record]
+    
+    def _set_nested_value(self, data, path, value):
+        keys = path.split('.')
+        current = data
+        
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+        
+        current[keys[-1]] = value
 
 
 class DataWriter(ABC):
@@ -152,7 +188,7 @@ class CSVWriter(DataWriter):
         self.file = open(file_path, 'w', encoding='utf-8')
         self.writer = None
         self.fieldnames = None
-        self.all_seen_fields = set()  # Track all fields seen across records
+        self.all_seen_fields = set()
 
     def write_header(self, fields):
         self.fieldnames = fields
