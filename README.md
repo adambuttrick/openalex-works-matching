@@ -63,11 +63,17 @@ python main.py -c configs/config_nwo.yaml --verbose --dry-run
 
 ## How Title Matching Works
 
+The title-based matching process now supports two retrieval methods: direct DOI/URL lookup and title search.
+
+### DOI/URL Retrieval
+When a URL field is configured and provided in the input data, the matching first attempts to extract a DOI from the URL. If a valid DOI can be extracted, the matching queries OpenAlex directly using this DOI in an attempt to find an exact match for the specific work. If the DOI retrieval fails (e.g. an invalid DOI or the DOI is no found on any work), the matching falls back to title-based searching.
+
+### Title-Based Search
 The title-based matching process begins by normalizing the input title to improve matching accuracy. When a title comes in as input, the matching first looks for and extracts any dates that might be embedded in the title text. For example, a title like "9 July 2019, Climate Change Report" becomes simply "Climate Change Report" with the date extracted and stored separately. The normalization then continues on to identifying and removing common title additions such as subtitles (appearing after colons or dashes), content in parentheses or brackets, report numbers, version indicators, and suffixes like "abstract" or "preprint". The text is then converted to lowercase, special characters are removed, and Unicode characters are transliterated to their ASCII equivalents. When aggressive matching is used, English stopwords can be filtered out as well.
 
 Once the title is normalized, the system searches OpenAlex using a two-stage approach. First, it attempts an exact search using the cleaned title. If this doesn't yield results above the specified similarity threshold, it falls back to a fuzzy search that can handle minor variations in wording. When a publication year is provided, the search is refined by filtering to publications within a ±2 year window, which significantly improves match accuracy and reduces false positives. The similarity between titles is calculated using Levenshtein distance, which measures the minimum number of single-character edits required to change one string into another.
 
-After potential matches are found, the system validates them through additional checks. If author information is available, it compares the last names of authors from the input with those in the OpenAlex record, requiring at least an 85% similarity match. Publication years are also validated when available, with a +/- two year tolerance. Only matches that exceed th similarity threshold (default 95%) are returned as valid matches.
+After potential matches are found, the system validates them through additional checks. If author information is available, it compares the last names of authors from the input with those in the OpenAlex record, requiring at least an 85% similarity match. Publication years are also validated when available, with a +/- two year tolerance. Only matches that exceed the similarity threshold (default 95%) are returned as valid matches.
 
 ## How Author-Affiliation Matching Works
 
@@ -105,6 +111,7 @@ input:
   mappings:
     award_id: "grant_number"      # Required
     title: "publication_title"    # Required
+    url: "doi_url"                # Optional (for work retrieval by DOI)
     authors: "author_list"        # Optional (for validation)
     year: "pub_year"              # Optional (for filtering)
 
@@ -206,6 +213,7 @@ The `mappings` section maps your input fields to standard fields. Required field
 |---------------|-------------|----------|-----------------|
 | `award_id` | Grant/award identifier | Yes | `"grant_number"` |
 | `title` | Publication title | Yes | `"publication_title"` |
+| `url` | DOI or publication URL | No | `"doi_url"` |
 | `authors` | Author names | No | `"author_list"` |
 | `year` | Publication year | No | `"pub_year"` |
 
@@ -239,10 +247,14 @@ The output includes all input records enriched with OpenAlex metadata. Output fi
 ```
 # Matching Metadata
 match_ratio              # Title similarity score (0-100)
-search_method            # "exact" or "fuzzy"
+search_method            # "doi", "cleaned_title", "truncated_title", etc.
+extracted_doi            # DOI extracted from URL (if provided)
 cleaned_title            # Normalized title used for search
 extracted_date           # Date extracted from title
 matched_title            # Actual title from OpenAlex
+
+# Input Fields (preserved in output)
+url                      # Original URL/DOI from input (if provided)
 
 # Validation Results
 matched_authors          # Boolean: authors validated
@@ -340,12 +352,16 @@ python main.py -c samples/sample_config/config_ukri.yaml --dry-run
 
 Sample input (CSV):
 ```csv
-grant_number,publication_title,author_list,pub_year
-ABC123,"Machine Learning for Climate Prediction","Smith J; Jones A",2023
-DEF456,"Novel Approaches to Quantum Computing","Brown M; Lee K",2022
+grant_number,publication_title,doi_url,author_list,pub_year
+ABC123,"Machine Learning for Climate Prediction",,"Smith J; Jones A",2023
+DEF456,"Novel Approaches to Quantum Computing","https://doi.org/10.1038/s41586-021-03819-2","Brown M; Lee K",2022
+GHI789,"Incorrect Title",https://doi.org/10.1126/science.abc7424,"Wilson R",2021
 ```
 
-Sample output: One row per input record with matched OpenAlex metadata.
+Sample output: One row per input record with matched OpenAlex metadata. Note that:
+- ABC123: No DOI provided, uses title search
+- DEF456: DOI provided, retrieves exact work (title may not match input)
+- GHI789: DOI retrieves correct work despite incorrect title in input
 
 ### Example 2: Author-Affiliation Matching
 ```bash
