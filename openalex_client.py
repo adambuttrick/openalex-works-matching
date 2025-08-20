@@ -489,16 +489,25 @@ class OpenAlexClient:
             metadata['issn'] = source.get('issn_l', '') if source else ''
             metadata['publisher'] = source.get(
                 'host_organization_name', '') if source else ''
-            metadata['volume'] = primary_location.get(
-                'volume', '') if primary_location else ''
-            metadata['issue'] = primary_location.get(
-                'issue', '') if primary_location else ''
-            metadata['pages'] = primary_location.get(
-                'pages', '') if primary_location else ''
         else:
             metadata['journal'] = ''
             metadata['issn'] = ''
             metadata['publisher'] = ''
+        
+        biblio = work_data.get('biblio') or {}
+        if biblio:
+            metadata['volume'] = biblio.get('volume', '')
+            metadata['issue'] = biblio.get('issue', '')
+            
+            first_page = biblio.get('first_page', '')
+            last_page = biblio.get('last_page', '')
+            if first_page and last_page:
+                metadata['pages'] = f"{first_page}-{last_page}"
+            elif first_page:
+                metadata['pages'] = first_page
+            else:
+                metadata['pages'] = ''
+        else:
             metadata['volume'] = ''
             metadata['issue'] = ''
             metadata['pages'] = ''
