@@ -1,8 +1,8 @@
 import re
+import nltk
 from datetime import datetime
 from unidecode import unidecode
 from nltk.corpus import stopwords
-import nltk
 
 try:
     nltk.data.find('corpora/stopwords')

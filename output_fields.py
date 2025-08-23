@@ -4,17 +4,16 @@ INPUT_FIELDS = [
     'url',
     'year',
     'authors',
-    'affiliation'
+    'affiliation',
 ]
 
 MATCHING_FIELDS = [
+    'cleaned_title',
     'match_status',
-    'match_method',
     # Title-specific matching fields
     'match_ratio',
     'search_method',
     'extracted_doi',
-    'cleaned_title',
     'extracted_date',
     'date_format',
     'matched_title',
@@ -32,16 +31,10 @@ MATCHING_FIELDS = [
 
 OPENALEX_FIELDS = [
     'openalex_work_id',
-    'metadata_source',
+    'doi',
     'publication_year',
     'publication_date',
-    'doi',
     'type',
-    'language',
-    'cited_by_count',
-    'is_retracted',
-    'work_authors',
-    'authors_count',
     'journal',
     'issn',
     'publisher',
@@ -55,23 +48,27 @@ OPENALEX_FIELDS = [
     'best_oa_pdf_url',
     'best_oa_license',
     'best_oa_version',
+    'language',
+    'cited_by_count',
+    'is_retracted',
+    'work_authors',
+    'authors_count',
     'topics',
     'abstract',
 ]
 
 FUNDING_FIELDS = [
     'has_any_target_funder',
-    'has_target_funder',
     'matched_target_funders',
     'matched_target_funder_names',
     'target_funder_match_count',
-    'funding_info',
-    'funding_count',
     'award_id_match',
     'award_id_match_type',
     'award_id_match_score',
     'matched_grant_award_id',
     'matched_grant_funder',
+    'funding_info',
+    'funding_count',
 ]
 
 VALIDATION_FIELDS = [

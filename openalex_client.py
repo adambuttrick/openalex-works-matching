@@ -7,6 +7,8 @@ from functools import wraps
 from collections import deque
 from thefuzz import fuzz
 from ratelimit import limits, sleep_and_retry
+
+from doi_parser import extract_doi
 from title_normalizer import clean_title_for_search, normalize_text, sanitize_for_openalex_search
 from author_affiliation_matcher import AuthorAffiliationMatcher
 
@@ -434,7 +436,6 @@ class OpenAlexClient:
 
     @timer_decorator
     def fetch_work_by_doi(self, doi_string):
-        from doi_parser import extract_doi
 
         doi = extract_doi(doi_string)
         if not doi:
@@ -1043,10 +1044,9 @@ class OpenAlexClient:
                 author_search_query = f"{first_name} {last_name}"
         elif author_style == 'last_initial':
             # Format: "Smith J" -> "J Smith" or "De La Cruz Pech-Canul Á" -> "Á De La Cruz Pech-Canul"
-            # Use the matcher to properly parse compound surnames
             parts = author_search_query.split()
             if len(parts) >= 2:
-                # Parse using our enhanced compound surname detection
+                # Parse using compound surname detection
                 surname_parts, initial_parts = AuthorAffiliationMatcher.parse_compound_surname_with_initial(
                     parts)
                 if surname_parts and initial_parts:
@@ -1054,7 +1054,7 @@ class OpenAlexClient:
                     initial = initial_parts[0]
                     author_search_query = f"{initial} {last_name}"
                 else:
-                    # Fallback to simple parsing if no clear initial detected
+                    # Fallback to simple parsing if no initial detected
                     last_name = ' '.join(parts[:-1])
                     initial = parts[-1]
                     author_search_query = f"{initial} {last_name}"
@@ -1065,7 +1065,6 @@ class OpenAlexClient:
                 r'([a-z])([A-Z])', r'\1 \2', author_search_query)
 
         # Also handle the case where the entire name lacks spaces (e.g., "SchroderAdams, Claudia")
-        # This should be done after the main format conversion
         if ',' in author_name:  # If original had a comma, apply space fix to the converted name
             author_search_query = re.sub(
                 r'([a-z])([A-Z])', r'\1 \2', author_search_query)

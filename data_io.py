@@ -56,8 +56,6 @@ def extract_authors_from_nested(data):
 
 
 class DataReader(ABC):
-    """Abstract base class for data readers."""
-
     def __init__(self, file_path, field_mappings):
         self.file_path = file_path
         self.field_mappings = field_mappings
